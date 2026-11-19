@@ -28,6 +28,8 @@ export interface Rect {
   hz: number;
   /** Optional: collision height. Defaults to `Infinity` (blocks walking & cars). */
   height?: number;
+  /** 'ground' = walkable ramp, no blocking (steps/kerbs only change groundHeight). */
+  kind?: 'building' | 'prop' | 'ground';
 }
 
 export interface XZ {
@@ -139,15 +141,22 @@ export interface RoadGraphEdge {
   length: number;
 }
 
-/** Directed lane graph. All roads are two lanes (each direction its own offset path). */
+/** Directed lane graph. Right-hand traffic: each direction has its own lane offset. */
 export interface RoadGraph {
   nodes: RoadGraphNode[];
-  /** Outgoing edges per node id. */
+  /** Outgoing edges per node (lane waypoint) id. Every node has >= 1 outgoing edge. */
   edges: Map<number, RoadGraphEdge[]>;
-  /** Find the nearest node usable as a lane point. */
+  /** Find the nearest node (by XZ distance) usable as a lane point. */
   nearestNode(x: number, z: number): number;
-  /** Road half width in metres. */
+  /** Half width of a lane offset from the road centreline, in metres. */
   laneWidth: number;
+  /**
+   * Follow the lane graph from `node`, continuing straight through intersections
+   * when possible and otherwise turning randomly. Returns every waypoint the
+   * vehicle passes, INCLUDING rounded corner points so traffic doesn't cut sharp
+   * 90° corners. Must always terminate (no infinite loops).
+   */
+  pathFrom(node: number, stopDistance: number, rng: () => number): XZ[];
 }
 
 /* -------------------------------------------------------------------------- */
@@ -162,8 +171,13 @@ export interface PlayerController {
   readonly speed: number;
   readonly isGrounded: boolean;
   onFoot: boolean;
+  /** Walk cycle phase in [0, 2π), used by the game for footstep sounds. */
+  readonly walkPhase: number;
+  /** True on the fixed step where the player jumped (edge). */
+  readonly didJump: boolean;
   update(dt: number, input: InputFrame, cameraYaw: number): void;
   setPosition(x: number, z: number, yaw?: number): void;
+  /** Avatar root (mesh hierarchy). Game adds/removes it from the scene when entering/exiting cars. */
   dispose(): void;
 }
 
@@ -196,10 +210,14 @@ export interface Vehicle {
   yaw: number;
   /** Signed speed along forward axis, m/s */
   speed: number;
+  /** Signed lateral (sideways) speed, m/s. Used for drift visuals + tyres. */
+  lateralSpeed: number;
   mesh: THREE.Object3D;
   /** True while the player is driving. */
   driven: boolean;
-  /** Ped/player exit point beside the car (world space) */
+  /** 'parked' = static until entered; 'traffic' = AI driven; 'player' = player driven. */
+  role: 'parked' | 'traffic' | 'player';
+  /** World-space exit point beside the car, pushed out of walls by the caller if needed. */
   exitSide(driverSide: 'left' | 'right'): XZ;
 }
 
@@ -211,8 +229,20 @@ export interface VehiclePhysicsApi {
   /**
    * Integrate one vehicle for dt with the player's input and the world colliders.
    * Must clamp to ground, resolve vehicle-vs-world collisions, and never tunnel.
+   * Returns the impact speed (m/s, 0 when no collision) so the game can shake
+   * the camera and play a crash sound.
    */
-  stepDriven(v: Vehicle, input: InputFrame, world: CollisionService, dt: number): void;
+  stepDriven(v: Vehicle, input: InputFrame, world: CollisionService, dt: number): number;
+  /**
+   * Called every frame for a player-driven vehicle: wheels turn, body pitches/rolls,
+   * brake lights, plus any dust/drift effect.
+   */
+  updateVisuals(v: Vehicle, dt: number, input: InputFrame): void;
+  /**
+   * Resolve player-driven vehicle vs every other vehicle. Called by the game
+   * after stepDriven. Should push this vehicle out (and nudge the other slightly).
+   */
+  resolveVehicleCollisions(v: Vehicle, others: readonly Vehicle[]): number;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -223,6 +253,10 @@ export interface NPCSystemApi {
   group: THREE.Group;
   /** Make every pedestrian / traffic vehicle avoid the player-driven car within radius. */
   update(dt: number, playerPos: XZ, drivenVehicle: Vehicle | null): void;
+  /** Downsampled positions for the minimap (max ~60 entries each). */
+  minimapData(): { cars: XZ[]; peds: XZ[] };
+  /** Vehicle meshes created for traffic so the player can also enter them. */
+  readonly trafficVehicles: readonly Vehicle[];
   dispose(): void;
 }
 
@@ -249,8 +283,10 @@ export interface MissionState {
   /** Time limit remaining in seconds, or null for none. */
   timeLeft: number | null;
   reward: number;
-  /** Optional progress text like "Packages 2 / 3". */
+  /** Optional progress text like "Time: 0:42". */
   detail?: string;
+  /** Set for one tick when the mission just completed / failed (game reacts once). */
+  event?: 'completed' | 'failed' | null;
 }
 
 export interface MissionEnv {
@@ -262,7 +298,7 @@ export interface MissionEnv {
 }
 
 export interface MissionApi {
-  state: MissionState;
+  readonly state: MissionState;
   /** Attach in-world marker meshes to this group. */
   group: THREE.Group;
   start(env: MissionEnv): void;
@@ -330,6 +366,8 @@ export interface DebugSnapshot {
   vehicle: { x: number; z: number; speed: number; type: string } | null;
   mission: MissionState;
   money: number;
+  health: number;
+  elapsed: number;
   npcCount: number;
   vehicleCount: number;
   buildings: number;

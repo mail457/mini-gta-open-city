@@ -95,6 +95,8 @@ export class Foundation {
         vehicle: null,
         mission: { phase: 'idle', title: '', objective: '', waypoint: null, waypointRadius: 0, timeLeft: null, reward: 0 },
         money: 0,
+        health: 100,
+        elapsed: this.engine.time,
         npcCount: 0,
         vehicleCount: 0,
         buildings: 7,
