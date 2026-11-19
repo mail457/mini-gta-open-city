@@ -33,6 +33,9 @@
 import * as THREE from 'three';
 import type { CityWorld, NPCSystemApi, Vehicle, VehicleSpec, XZ } from '../contracts';
 import { STREETS, BLOCK, X_OFFSET, Z_OFFSET, nsX, ewZ, streetHalfWidth, SIDEWALK_WIDTH } from '../world/layout';
+
+/** Centre of block (ix, 1) horizontally — the start street's block. */
+const blockRectCenterX = (ix: number): number => nsX(ix) + streetHalfWidth(ix) + (BLOCK - streetHalfWidth(ix) - streetHalfWidth(ix + 1)) / 2;
 import { angleDelta, clamp, lerp, makeRng } from '../core/utils';
 
 /* -------------------------------------------------------------------------- */
@@ -525,6 +528,7 @@ export class NpcSystem implements NPCSystemApi {
         lateralSpeed: 0,
         mesh,
         driven: false,
+        shape: 'traffic' as const,
         role: 'traffic',
         exitSide: (driverSide: 'left' | 'right'): XZ => this.exitPoint(ai.vehicle, driverSide),
       };
@@ -532,6 +536,77 @@ export class NpcSystem implements NPCSystemApi {
       this.cars.push(ai);
       this.trafficVehicles.push(vehicle);
     }
+    this.spawnNearbyTraffic();
+  }
+
+  /**
+   * One guaranteed traffic car rolling down the start street towards the player.
+   * Deterministic (not RNG-based) so the opening seconds always have a car to
+   * jack, and so automated tests can script it.
+   */
+  private spawnNearbyTraffic(): void {
+    const g = this.world.roadGraph;
+    if (!g) return;
+    // Start street: E-W street index 1, north-bound? Use the lane heading east
+    // (+X) on ewZ(1), 40 m east of the block centre used by the Lead's spawn.
+    const laneZ = ewZ(1) + streetHalfWidth(1) * 0.6;
+    const x0 = blockRectCenterX(1) + 30;
+    const nodeId = g.nearestNode(x0, laneZ);
+    const node = g.nodes[nodeId];
+    if (!node) return;
+    const path = this.safePath(nodeId, 90);
+    if (!path.length) return;
+    const isVan = false;
+    const mesh = new THREE.Group();
+    mesh.name = 'traffic-nearby';
+    const hull = new THREE.Mesh(this.carGeos[1], this.carMat);
+    hull.position.y = 0.62;
+    const cabin = new THREE.Mesh(this.carGeos[2], this.carMat);
+    cabin.position.y = 1.17;
+    const wheelGeo = this.carGeos[0];
+    const mk = (): THREE.Object3D => {
+      const pivot = new THREE.Group();
+      pivot.add(new THREE.Mesh(wheelGeo, this.carMat));
+      return pivot;
+    };
+    const wheels: CarWheels = { fl: mk(), fr: mk(), rl: mk(), rr: mk() };
+    const sx = NPC_CONFIG.carLen * 0.32;
+    const sz = NPC_CONFIG.carWid * 0.5 - 0.02;
+    wheels.fl.position.set(sx, 0.34, sz);
+    wheels.fr.position.set(sx, 0.34, -sz);
+    wheels.rl.position.set(-sx, 0.34, sz);
+    wheels.rr.position.set(-sx, 0.34, -sz);
+    mesh.add(hull, cabin, wheels.fl, wheels.fr, wheels.rl, wheels.rr);
+    mesh.position.set(node.x, 0, node.z);
+    mesh.rotation.y = 0;
+    this.group.add(mesh);
+    const ai: TrafficAI = {
+      vehicle: null as unknown as Vehicle,
+      wheels,
+      path,
+      next: 0,
+      cruise: 10,
+      stuckTimer: 5,
+      aiActive: true,
+      lastX: node.x,
+      lastZ: node.z,
+      wheelSpin: 0,
+    };
+    const vehicle: Vehicle = {
+      spec: this.makeTrafficSpec(0, isVan),
+      position: new THREE.Vector3(node.x, 0, node.z),
+      yaw: 0,
+      speed: 0,
+      lateralSpeed: 0,
+      mesh,
+      driven: false,
+      shape: 'traffic',
+      role: 'traffic',
+      exitSide: (driverSide: 'left' | 'right'): XZ => this.exitPoint(ai.vehicle, driverSide),
+    };
+    ai.vehicle = vehicle;
+    this.cars.push(ai);
+    this.trafficVehicles.push(vehicle);
   }
 
   /** Exit point beside a traffic car. driverSide 'left' = the driver's left of the heading. */

@@ -214,7 +214,8 @@ describe('NPCSystem — construction', () => {
     const sys = createNPCSystem(scene, world);
     expect(scene.children).toContain(sys.group);
     expect(sys.pedCount).toBe(NPC_CONFIG.pedestrians);
-    expect(sys.trafficVehicles.length).toBe(NPC_CONFIG.trafficCars);
+    // NPC_CONFIG.trafficCars random lane followers + 1 guaranteed car near the spawn.
+    expect(sys.trafficVehicles.length).toBe(NPC_CONFIG.trafficCars + 1);
     // Ped meshes: 14 avatars * (torso + head + headGroup + 2 legs) groups in the root.
     const pedRoots = sys.group.children.filter((c) => !c.name.startsWith('traffic-'));
     expect(pedRoots).toHaveLength(NPC_CONFIG.pedestrians);

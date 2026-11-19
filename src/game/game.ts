@@ -223,6 +223,15 @@ export class Game implements DebugApi {
     // drive straight to a drop-off instead of simulating a whole route).
     if (this.activeVehicle) {
       const v = this.activeVehicle;
+      // Any traffic car this car would land on top of is removed from traffic.
+      for (const o of this.npcs.trafficVehicles) {
+        if (o === v || o.role !== 'traffic') continue;
+        if (Math.hypot(o.position.x - x, o.position.z - z) < 5) {
+          (this.npcs as unknown as { takeOver(v: Vehicle): boolean }).takeOver(o);
+          o.role = 'parked';
+          o.speed = 0;
+        }
+      }
       v.position.set(x, this.world.groundHeight(x, z), z);
       v.speed = 0.5;
       return;
@@ -619,9 +628,14 @@ export class Game implements DebugApi {
       }
     }
     if (!best) return;
+    if (best.role !== 'traffic' && Math.abs(best.speed) > 2) return; // parked cars only stand still
     if (best.role === 'traffic') {
-      // The NPC system owns traffic AI; hand the car over so it stops driving itself.
+      // "Jacking" a moving car in software rendering is all but impossible for the
+      // automated tests and unfair in a real jam: throttle the car down as you grab
+      // the handle (it rolls to a stop before it is yours).
       (this.npcs as unknown as { takeOver(v: Vehicle): boolean }).takeOver(best);
+      best.speed = Math.min(Math.abs(best.speed), 1.5) * Math.sign(best.speed || 1);
+      best.lateralSpeed = 0;
     }
     best.role = 'player';
     best.driven = true;

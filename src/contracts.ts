@@ -217,6 +217,11 @@ export interface Vehicle {
   driven: boolean;
   /** 'parked' = static until entered; 'traffic' = AI driven; 'player' = player driven. */
   role: 'parked' | 'traffic' | 'player';
+  /**
+   * Which collision model the vehicle uses with the player-driven physics:
+   * 'car' = 3-circle capsule (default), 'traffic' = 2-circle (NPC meshes are shorter).
+   */
+  shape?: 'car' | 'traffic';
   /** World-space exit point beside the car, pushed out of walls by the caller if needed. */
   exitSide(driverSide: 'left' | 'right'): XZ;
 }
