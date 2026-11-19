@@ -210,8 +210,10 @@ export class Game implements DebugApi {
   start(): void {
     this.audio.play('ui');
     this.setStatus('playing');
-    this.input.requestLock();
+    // Note: the pointer lock is acquired from the canvas' own click handler
+    // (see main.ts) so it is always tied to a user gesture.
     this.audio.play('missionStart');
+    this.elapsed = 0;
     this.hud.toast('THE DELIVERY RUN — meet the courier', 'info', 4);
     this.mission.start(this.missionEnv());
   }
@@ -234,6 +236,11 @@ export class Game implements DebugApi {
     this.cameraRig.snapTo(this.player.position);
   }
 
+  /** Ask the browser for the mouse pointer lock (call from a user gesture). */
+  requestPointerLock(): void {
+    if (this.gameStatus === 'playing') this.input.requestLock();
+  }
+
   setSimSpeed(multiplier: number): void {
     this.engine.simSpeed = Math.max(0.1, Math.min(8, multiplier));
   }
@@ -250,7 +257,7 @@ export class Game implements DebugApi {
       player: { x: p.x, y: p.y, z: p.z, yaw: this.player.yaw },
       playerInVehicle: !!v,
       vehicle: v ? { x: v.position.x, z: v.position.z, speed: v.speed, type: v.spec.id } : null,
-      mission: { ...this.mission.state },
+      mission: { ...this.mission.state, waypoint: this.mission.state.waypoint ? { ...this.mission.state.waypoint } : null },
       money: this.state.money,
       health: this.state.health,
       elapsed: this.elapsed,
@@ -284,6 +291,8 @@ export class Game implements DebugApi {
 
   private pause(): void {
     if (this.gameStatus !== 'playing') return;
+    // Real browsers expect Escape to release the pointer lock itself.
+    this.input.releaseLock();
     this.audio.play('ui');
     this.setStatus('paused');
   }
@@ -291,7 +300,6 @@ export class Game implements DebugApi {
   private resume(): void {
     this.audio.play('ui');
     this.setStatus('playing');
-    this.input.requestLock();
   }
 
   private quitToMenu(): void {
@@ -310,6 +318,7 @@ export class Game implements DebugApi {
 
   /** Full mission + world restart, keeping money. */
   restart(): void {
+    this.previousMoney = this.state.money;
     this.audio.play('ui');
     this.hud.clearMissionResult();
     this.mission.dispose();
@@ -331,8 +340,8 @@ export class Game implements DebugApi {
     this.cameraRig.snapTo(this.player.position);
     this.elapsed = 0;
     this.state.reset();
+    this.state.money = this.previousMoney;
     this.setStatus('playing');
-    this.input.requestLock();
     this.mission.start(this.missionEnv());
     this.hud.toast('RESTARTED — delivery run active', 'info', 2.5);
   }
@@ -373,8 +382,11 @@ export class Game implements DebugApi {
     input.sprint = pending.sprint;
     input.handbrake = pending.handbrake;
     input.jump = pending.jump;
-    input.interact = pending.interact;
-    input.pauseToggle = pending.pauseToggle;
+    const now = performance.now();
+    if (pending.interact) this.interactLatchedUntil = now + 140;
+    if (pending.pauseToggle) this.pauseLatchedUntil = now + 140;
+    input.interact = pending.interact || now < this.interactLatchedUntil;
+    input.pauseToggle = pending.pauseToggle || now < this.pauseLatchedUntil;
     input.lookX = pending.lookX;
     input.lookY = pending.lookY;
     pending.jump = false;
@@ -386,7 +398,7 @@ export class Game implements DebugApi {
     const isFirstStep = this.pendingFirst;
     this.pendingFirst = false;
     this.input.age(dt);
-    this.elapsed += dt;
+    if (this.gameStatus === 'playing') this.elapsed += dt;
     this.interactCooldown = Math.max(0, this.interactCooldown - dt);
 
     // Hotkeys apply to the first simulation step of each frame.
@@ -410,7 +422,7 @@ export class Game implements DebugApi {
 
     // --- Enter / exit vehicles -----------------------------------------
     if (input.interact && this.interactCooldown <= 0) {
-      this.interactCooldown = 0.35;
+      this.interactCooldown = 0.25;
       if (this.activeVehicle) this.exitVehicle();
       else this.tryEnterVehicle();
     }
@@ -480,6 +492,11 @@ export class Game implements DebugApi {
   }
 
   private lastMoney = 0;
+  private previousMoney = 0;
+  // Taps are latched briefly: an edge that was queued during any stalled or
+  // resumed-indicator frame is still honoured on the next live simulation step.
+  private interactLatchedUntil = 0;
+  private pauseLatchedUntil = 0;
   private lastSpeedRatio = 0;
   private aoPoi: XZ | null = null;
   private lastStepSound = 0;
@@ -655,7 +672,7 @@ export class Game implements DebugApi {
       title: 'MISSION COMPLETE',
       subtitle: s.title || 'THE DELIVERY RUN',
       reward: s.reward,
-      timeSeconds: this.elapsed,
+      timeSeconds: this.mission.deliveryTime,
     };
     this.hud.showMissionResult(result, { onContinue: () => this.continueFreeRoam(), onRestart: () => this.restart() });
     this.screens.showMissionResult(result, () => this.continueFreeRoam(), () => this.restart());
@@ -679,7 +696,6 @@ export class Game implements DebugApi {
   private continueFreeRoam(): void {
     this.hud.clearMissionResult();
     this.setStatus('playing');
-    this.input.requestLock();
     this.hud.toast('FREE ROAM — explore the city', 'good', 3);
   }
 

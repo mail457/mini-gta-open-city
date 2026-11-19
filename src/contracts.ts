@@ -299,6 +299,8 @@ export interface MissionEnv {
 
 export interface MissionApi {
   readonly state: MissionState;
+  /** Seconds spent in the delivery phase (for the mission-result screen). */
+  readonly deliveryTime: number;
   /** Attach in-world marker meshes to this group. */
   group: THREE.Group;
   start(env: MissionEnv): void;

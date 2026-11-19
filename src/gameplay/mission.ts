@@ -99,9 +99,12 @@ export class DeliveryRunMission implements MissionApi {
   private discMat: THREE.MeshBasicMaterial | null = null;
 
   private elapsed = 0;
+  /** Seconds spent in the delivery phase (used for the result screen). */
+  get deliveryTime(): number {
+    return this._deliveryTime;
+  }
+  private _deliveryTime = 0;
   private markerTime = 0;
-  /** Cached waypoint object (stable identity while the target does not change). */
-  private readonly waypointScratch: XZ = { x: 0, z: 0 };
   private waypointTarget: XZ | null = null;
   private disposed = false;
 
@@ -117,12 +120,14 @@ export class DeliveryRunMission implements MissionApi {
   /** Begin the mission (from 'idle' or over any terminal / running phase). */
   start(env: MissionEnv): void {
     if (this.disposed) return;
+    this._deliveryTime = 0;
     this.enterPhase('meet', env);
   }
 
   /** Replay after complete / failed (and a safe alias of start() while running). */
   restart(env: MissionEnv): void {
     if (this.disposed) return;
+    this._deliveryTime = 0;
     this.enterPhase('meet', env);
   }
 
@@ -135,6 +140,7 @@ export class DeliveryRunMission implements MissionApi {
     const step = Number.isFinite(dt) && dt > 0 ? Math.min(dt, 0.25) : 0;
     this.elapsed += step;
     this.markerTime += step;
+    if (s.phase === 'deliver') this._deliveryTime += step;
 
     switch (s.phase) {
       case 'meet':
@@ -366,9 +372,9 @@ export class DeliveryRunMission implements MissionApi {
       this.waypointTarget = null;
       return;
     }
-    this.waypointScratch.x = target.x;
-    this.waypointScratch.z = target.z;
-    s.waypoint = this.waypointScratch;
+    // Always a fresh object: callers (HUD, debug API) snapshot waypoints, and the
+    // shared scratch object would mutate while snapshots still referenced it.
+    s.waypoint = { x: target.x, z: target.z };
     s.waypointRadius = radius;
     this.waypointTarget = target;
     this.positionMarker(target, radius);

@@ -32,6 +32,11 @@ try {
   if (!root) throw new Error('UI root element #ui-root is missing.');
   canvas.tabIndex = 0;
   const game = new Game(canvas, { root, createHud, createScreens });
+  // Pointer lock must come from a user gesture: capture the mouse when the
+  // player clicks the game view while playing (Esc releases it → auto-pause).
+  canvas.addEventListener('click', () => game.requestPointerLock());
+  // Keyboard focus so players can forget about clicking into the page.
+  window.addEventListener('keydown', () => canvas.focus({ preventScroll: true }), { once: false });
   // Test hook: the debug API is also what Playwright drives.
   if (import.meta.env.DEV) {
     console.info('[mini-gta] ready', JSON.stringify(game.snapshot()));
