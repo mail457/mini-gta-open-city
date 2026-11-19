@@ -344,8 +344,11 @@ export interface HudApi {
   update(data: HudData): void;
   /** Show a transient toast ("MISSION COMPLETE", "+$500", hazards). */
   toast(text: string, kind?: 'info' | 'good' | 'bad', duration?: number): void;
-  /** Show the full-screen mission complete / failed panel. */
-  showMissionResult(result: MissionResultView): void;
+  /**
+   * Show the full-screen mission complete / failed panel.
+   * `actions` wires the overlay's CONTINUE / RESTART buttons (and Enter / R).
+   */
+  showMissionResult(result: MissionResultView, actions?: { onContinue?: () => void; onRestart?: () => void }): void;
   clearMissionResult(): void;
 }
 

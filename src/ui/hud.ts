@@ -924,9 +924,11 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): HudContr
       (node as HTMLElement & { _t?: number[] })._t = [t1, t2];
     },
 
-    showMissionResult(view: MissionResultView): void {
+    showMissionResult(view: MissionResultView, actions?: { onContinue?: () => void; onRestart?: () => void }): void {
       if (disposed) return;
       resultVisible = true;
+      onContinue = actions?.onContinue ?? null;
+      onRestart = actions?.onRestart ?? null;
       const success = !!view.success;
       resultOverlay.classList.toggle('mg-fail', !success);
       setText(resultTitle, success ? 'Mission complete' : 'Mission failed');

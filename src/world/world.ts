@@ -33,8 +33,12 @@ import {
   pushOutOfRect,
 } from './cityLayout';
 import { makeRng } from '../core/utils';
+import { createWindows } from './windows';
 
 const BOUNDS = { minX: WORLD_MIN, maxX: WORLD_MAX, minZ: WORLD_MIN, maxZ: WORLD_MAX };
+
+/** Depth of the walkable plaza on every side of a block. */
+export const PLAZA_D = 6;
 
 const PALETTE = {
   asphalt: 0x2e323a,
@@ -70,10 +74,13 @@ function buildBuildings(): BuildingDef[] {
     for (let iz = 0; iz < STREETS - 1; iz++) {
       if (isParkBlock(ix, iz) || isParkingBlock(ix, iz)) continue;
       const b = blockRect(ix, iz);
-      const innerX0 = b.minX + SIDEWALK_WIDTH;
-      const innerX1 = b.maxX - SIDEWALK_WIDTH;
-      const innerZ0 = b.minZ + SIDEWALK_WIDTH;
-      const innerZ1 = b.maxZ - SIDEWALK_WIDTH;
+      // Buildings never touch the pavement edge or the plazas: a 1.5 m service
+      // strip plus PLAZA_D of walkable ground keeps every block perimeter open.
+      const B_INSET = SIDEWALK_WIDTH + PLAZA_D + 1.5;
+      const innerX0 = b.minX + B_INSET;
+      const innerX1 = b.maxX - B_INSET;
+      const innerZ0 = b.minZ + B_INSET;
+      const innerZ1 = b.maxZ - B_INSET;
       const w = innerX1 - innerX0;
       const d = innerZ1 - innerZ0;
       // 1–3 lots per block.
@@ -156,6 +163,7 @@ export class City implements CityWorld {
   private tmpIdx: number[] = [];
   private trafficLights: THREE.InstancedMesh | null = null;
   private tris = 0;
+  private plazas: Array<{ minX: number; maxX: number; minZ: number; maxZ: number }> = [];
 
   constructor() {
     this.group.name = 'city';
@@ -300,7 +308,23 @@ export class City implements CityWorld {
           }
           inners.push(box(iw, 0.02, 0.15, b.cx, KERB_HEIGHT + 0.02, b.cz - id * 0.22 + 2.5, PALETTE.white));
         } else {
-          inners.push(plane(iw, id, b.cx, KERB_HEIGHT + 0.01, b.cz, 0x7c8478));
+          // Inner courtyard accessed through the street-facing plazas.
+          inners.push(plane(iw, id, b.cx, KERB_HEIGHT + 0.005, b.cz, 0x7d8579));
+          // Half-metre pavements at the ends of each block: the plazas.
+          inners.push(plane(iw, PLAZA_D, b.cx, KERB_HEIGHT + 0.01, b.minZ + SIDEWALK_WIDTH + PLAZA_D / 2, PALETTE.sidewalk));
+          inners.push(plane(iw, PLAZA_D, b.cx, KERB_HEIGHT + 0.01, b.maxZ - SIDEWALK_WIDTH - PLAZA_D / 2, PALETTE.sidewalk));
+          inners.push(plane(PLAZA_D, id, b.minX + SIDEWALK_WIDTH + PLAZA_D / 2, KERB_HEIGHT + 0.01, b.cz, PALETTE.sidewalk));
+          inners.push(plane(PLAZA_D, id, b.maxX - SIDEWALK_WIDTH - PLAZA_D / 2, KERB_HEIGHT + 0.01, b.cz, PALETTE.sidewalk));
+          const pz0 = b.minZ + SIDEWALK_WIDTH;
+          const pz1 = b.maxZ - SIDEWALK_WIDTH;
+          const px0 = b.minX + SIDEWALK_WIDTH;
+          const px1 = b.maxX - SIDEWALK_WIDTH;
+          this.plazas.push(
+            { minX: px0, maxX: px1, minZ: pz0, maxZ: pz0 + PLAZA_D },
+            { minX: px0, maxX: px1, minZ: pz1 - PLAZA_D, maxZ: pz1 },
+            { minX: px0, maxX: px0 + PLAZA_D, minZ: pz0, maxZ: pz1 },
+            { minX: px1 - PLAZA_D, maxX: px1, minZ: pz0, maxZ: pz1 },
+          );
         }
       }
     }
@@ -326,12 +350,6 @@ export class City implements CityWorld {
     for (const b of defs) {
       const h = b.h;
       facades.push(box(b.hx * 2, h, b.hz * 2, b.x, h / 2, b.z, b.color));
-      // Window bands on the two street-facing sides (X/Z faces) — cheap emissive-ish squares.
-      const floors = Math.max(2, Math.floor(h / 4));
-      for (let f = 1; f < floors; f++) {
-        const y = (h / floors) * f;
-        windows.push(box(b.hx * 2 + 0.04, 1.1, b.hz * 2 + 0.04, b.x, y, b.z, GLASS));
-      }
       // Roofline.
       roofGeos.push(box(b.hx * 2 + 0.6, 0.6, b.hz * 2 + 0.6, b.x, h + 0.3, b.z, ROOF));
       if (b.roof === 'stepped') {
@@ -343,14 +361,26 @@ export class City implements CityWorld {
       }
       // Collider (full footprint, from ground to roof).
       this.colliders.push({ x: b.x, z: b.z, hx: b.hx, hz: b.hz, height: h, kind: 'building' });
+      if (import.meta.env?.DEV) {
+        for (const pz of this.plazas) {
+          if (b.x + b.hx > pz.minX && b.x - b.hx < pz.maxX && b.z + b.hz > pz.minZ && b.z - b.hz < pz.maxZ) {
+            console.warn('[city] building overlaps a plaza', b);
+          }
+        }
+      }
     }
     this.add(facades, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78 }), true);
-    this.add(windows, new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      roughness: 0.25,
-      metalness: 0.4,
-      emissive: new THREE.Color(0x0d1620),
-    }), false);
+    // Windows: one InstancedMesh for the whole city (see world/windows.ts).
+    const win = createWindows(
+      defs.map((d) => ({ x: d.x, z: d.z, hx: d.hx, hz: d.hz, h: d.h })),
+      makeRng(5150),
+    );
+    if (win) {
+      this.group.add(win.mesh);
+      this.disposables.push({ dispose: () => win.dispose() } as unknown as THREE.BufferGeometry);
+      this.tris += win.count * 2;
+    }
+    void windows;
     this.add(roofGeos, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }), false);
   }
 
@@ -599,39 +629,56 @@ export class City implements CityWorld {
     return false;
   }
 
+  /** True on pavements: the road-side ring of every block plus the inner plazas. */
   isSidewalk(x: number, z: number): boolean {
-    if (this.isRoad(x, z)) return false;
+    if (this.isRoad(x, z) || !this.inBounds(x, z, 0)) return false;
+    const S = SIDEWALK_WIDTH;
     for (let ix = 0; ix < STREETS - 1; ix++) {
       for (let iz = 0; iz < STREETS - 1; iz++) {
         const b = blockRect(ix, iz);
-        if (x >= b.minX && x <= b.maxX && z >= b.minZ && z <= b.maxZ) return true;
+        if (x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ) continue;
+        // Road-side pavement strips.
+        if (x - b.minX <= S || b.maxX - x <= S || z - b.minZ <= S || b.maxZ - z <= S) return true;
+        // Plazas around the building.
+        for (const pz of this.plazas) {
+          if (x >= pz.minX && x <= pz.maxX && z >= pz.minZ && z <= pz.maxZ) return true;
+        }
       }
+    }
+    // Standalone plazas (parking lot / park interiors are walkable too).
+    for (const pz of this.plazas) {
+      if (x >= pz.minX && x <= pz.maxX && z >= pz.minZ && z <= pz.maxZ) return true;
     }
     return false;
   }
 
+  /** Nearest point that is actually on a pavement (road-side strips and plazas). */
   nearestSidewalkPoint(x: number, z: number): XZ {
     let best: XZ = { x, z };
     let bestD = Infinity;
+    const mid = SIDEWALK_WIDTH * 0.5;
+    const consider = (cx: number, cz: number) => {
+      const d = (cx - x) * (cx - x) + (cz - z) * (cz - z);
+      if (d < bestD) {
+        bestD = d;
+        best = { x: cx, z: cz };
+      }
+    };
     for (let ix = 0; ix < STREETS - 1; ix++) {
       for (let iz = 0; iz < STREETS - 1; iz++) {
         const b = blockRect(ix, iz);
-        const off = SIDEWALK_WIDTH * 0.5;
-        const cands: XZ[] = [
-          { x, z: b.minZ + off },
-          { x, z: b.maxZ - off },
-          { x: b.minX + off, z },
-          { x: b.maxX - off, z },
-        ];
-        for (const c of cands) {
-          if (c.x < b.minX || c.x > b.maxX || c.z < b.minZ || c.z > b.maxZ) continue;
-          const d = (c.x - x) * (c.x - x) + (c.z - z) * (c.z - z);
-          if (d < bestD) {
-            bestD = d;
-            best = c;
-          }
+        for (let t = b.minX + mid; t <= b.maxX - mid; t += 2) {
+          consider(t, b.minZ + mid);
+          consider(t, b.maxZ - mid);
+        }
+        for (let t = b.minZ + mid; t <= b.maxZ - mid; t += 2) {
+          consider(b.minX + mid, t);
+          consider(b.maxX - mid, t);
         }
       }
+    }
+    for (const pz of this.plazas) {
+      consider(Math.min(Math.max(x, pz.minX + 0.6), pz.maxX - 0.6), Math.min(Math.max(z, pz.minZ + 0.6), pz.maxZ - 0.6));
     }
     return best;
   }

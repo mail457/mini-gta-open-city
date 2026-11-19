@@ -21,6 +21,10 @@
 import * as THREE from 'three';
 import type { CollisionService, InputFrame, PlayerController } from '../contracts';
 import { clamp, damp, dampAngle } from '../core/utils';
+import { WORLD_MAX, WORLD_MIN } from '../world/layout';
+
+const BOUND_MAX = WORLD_MAX;
+const BOUND_MIN = WORLD_MIN;
 
 /* -------------------------------------------------------------------------- */
 /* Tuning constants (exported so the Lead can review the feel)                 */
@@ -455,7 +459,16 @@ export class Player implements PlayerController {
       if (Number.isNaN(this.bMinX)) this.probeBounds();
       const cx = clamp(this.position.x, this.bMinX + m, this.bMaxX - m);
       const cz = clamp(this.position.z, this.bMinZ + m, this.bMaxZ - m);
-      if (this.world.inBounds(cx, cz, m)) {
+      if (!this.world.inBounds(this.position.x, this.position.z, 0)) {
+        // Wedged outside the playable area (world edge / geometry change):
+        // project back onto the bounds instead of freezing in place.
+        const bx = clamp(this.position.x, BOUND_MIN + m, BOUND_MAX - m);
+        const bz = clamp(this.position.z, BOUND_MIN + m, BOUND_MAX - m);
+        this.position.x = bx;
+        this.position.z = bz;
+        this.vel.x = 0;
+        this.vel.y = 0;
+      } else if (this.world.inBounds(cx, cz, m)) {
         if (cx !== this.position.x) this.vel.x = 0;
         if (cz !== this.position.z) this.vel.y = 0;
         this.position.x = cx;

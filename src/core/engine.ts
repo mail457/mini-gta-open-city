@@ -33,6 +33,8 @@ export class Engine {
   private highFpsTime = 0;
   private readonly fixedStep = 1 / 60;
   onFpsSample: ((fps: number) => void) | null = null;
+  /** Optional per-frame input pump, called once before the fixed sub-steps. */
+  perFrameInput: (() => unknown) | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     let renderer: THREE.WebGLRenderer;
@@ -57,8 +59,11 @@ export class Engine {
     this.renderer = renderer;
 
     this.scene = new THREE.Scene();
+    this.scene.matrixWorldAutoUpdate = false;
     this.camera = new THREE.PerspectiveCamera(62, 1, 0.1, 600);
     this.camera.position.set(0, 6, 12);
+    this.camera.matrixWorldAutoUpdate = false;
+    this.camera.layers.enableAll();
 
     this.resize();
     window.addEventListener('resize', this.onResize);
@@ -137,6 +142,8 @@ export class Engine {
         this.onFpsSample?.(this.fps);
       }
 
+      // Pump input once per rendered frame; the game copies it into each sub-step.
+      this.perFrameInput?.();
       if (!this.paused) {
         const simDt = dt * this.simSpeed;
         this.accumulator += simDt;
@@ -151,6 +158,10 @@ export class Engine {
         }
         if (steps >= maxSteps) this.accumulator = 0;
       }
+      // The world is static between frames: update matrices once per frame and
+      // keep the renderer from re-walking the whole graph on every draw.
+      this.scene.updateMatrixWorld(true);
+      this.camera.updateMatrixWorld(true);
       this.hooks?.render();
     };
     this.raf = requestAnimationFrame(tick);

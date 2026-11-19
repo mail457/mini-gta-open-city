@@ -35,6 +35,8 @@ export class ThirdPersonCamera {
   }
 
   shake(amount: number): void {
+    // Audio-thread safety: never let a NaN reach the matrix (it kills the WebAudio renderer).
+    if (!Number.isFinite(amount) || amount <= 0) return;
     this.shakeAmp = Math.min(0.4, this.shakeAmp + amount);
   }
 
@@ -72,6 +74,10 @@ export class ThirdPersonCamera {
    * @param autoYaw when driving and no mouse input recently, trail the car heading
    */
   update(anchor: THREE.Vector3, dt: number, speedRatio: number, autoYaw: number | null, obstacles: XZ[] = []): void {
+    // Safe orbit radius so the polar boom never dips under the street when
+    // the player looks up (pitch → 0): R*sin(pitch) must stay above ~1.2 m.
+    const safeR = Math.min(this.distance + speedRatio * 1.8, 1.35 / Math.sin(Math.max(this.pitch, 0.02)));
+    this.distance = damp(this.distance, Math.min(this.distance, Math.max(safeR, 2.4)), 8, dt);
     if (autoYaw !== null) {
       // Blend camera behind vehicle only when the player isn't steering the camera.
       let d = autoYaw - this.yaw;

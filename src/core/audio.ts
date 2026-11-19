@@ -12,9 +12,18 @@ export class Audio implements AudioBus {
   private engineOsc2: OscillatorNode | null = null;
   private muted = false;
   private engineStarted = false;
+  private dead = false;
   private lastUnlock = 0;
 
   private ensure(): AudioContext | null {
+    // A NaN/Infinity buffer or gain can permanently kill the AudioContext
+    // ("Render quantum size ... invalid"). Once that happens we never use it again.
+    if (this.dead) return null;
+    if (this.ctx && this.ctx.state === 'closed') {
+      this.ctx = null;
+      this.master = null;
+      this.engineStarted = false;
+    }
     if (this.ctx) {
       if (this.ctx.state === 'suspended' && performance.now() - this.lastUnlock > 250) {
         this.lastUnlock = performance.now();
@@ -27,6 +36,9 @@ export class Audio implements AudioBus {
     if (!Ctor) return null;
     try {
       this.ctx = new Ctor();
+      this.ctx.addEventListener?.('statechange', () => {
+        if (this.ctx && this.ctx.state === 'closed') this.dead = true;
+      });
       this.master = this.ctx.createGain();
       this.master.gain.value = this.muted ? 0 : 0.5;
       this.master.connect(this.ctx.destination);
@@ -156,6 +168,7 @@ export class Audio implements AudioBus {
       this.engineOsc2.start();
     }
     const t = ctx.currentTime;
+    if (!Number.isFinite(rpm)) rpm = 0;
     const target = playing && !this.muted ? 0.06 + rpm * 0.06 : 0;
     this.engineGain!.gain.setTargetAtTime(target, t, 0.1);
     const f = 50 + rpm * 150;

@@ -270,8 +270,8 @@ export interface PoiDef {
 }
 
 /** Sidewalk point: midway along the first block's north edge, near the spawn. */
-const SPAWN: XZ = { x: -104, z: -100 };
-const MISSION_START: XZ = { x: -40, z: -100 };
+const SPAWN: XZ = { x: blockRect(0, 1).cx, z: ewZ(1) + streetHalfWidth(1) + 2.2 };
+const MISSION_START: XZ = { x: blockRect(1, 1).cx + 14, z: ewZ(1) - streetHalfWidth(1) - 2.2 };
 const PARKING: XZ = { x: blockRect(3, 1).cx, z: blockRect(3, 1).cz };
 const PARK: XZ = { x: blockRect(2, 2).cx, z: blockRect(2, 2).cz };
 /** Drop-off: on the south-bound kerbside lane of the eastern arterial. */

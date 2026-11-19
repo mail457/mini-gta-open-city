@@ -28,6 +28,7 @@ import { Input } from '../core/input';
 import { ThirdPersonCamera } from '../core/camera';
 import { AUDIO } from '../core/audioRef';
 import { createSky } from './sky';
+import { PERF } from '../core/probe';
 import { createWorld } from '../world/world';
 import { Player } from '../entities/player';
 import { VehicleSystem } from '../entities/vehicles';
@@ -35,6 +36,7 @@ import { createNPCSystem } from '../gameplay/npcs';
 import { createMission } from '../gameplay/mission';
 import { GameState } from '../gameplay/gameState';
 import { nsX, ewZ, streetHalfWidth } from '../world/layout';
+import { blockRect } from '../world/cityLayout';
 import type { VehicleTypeId } from '../contracts';
 
 export interface GameDeps {
@@ -90,6 +92,14 @@ export class Game implements DebugApi {
   private audio: AudioBus = AUDIO;
   private elapsed = 0;
   private interactCooldown = 0;
+  private frameInput: InputFrame = {
+    moveX: 0, moveY: 0, sprint: false, jump: false, interact: false,
+    pauseToggle: false, handbrake: false, lookX: 0, lookY: 0,
+  };
+  private frameEdges = { restart: false, mute: false, perf: false };
+  private pendingInput: InputFrame = { ...this.frameInput };
+  /** True once until the next per-frame input pump (first sub-step of a frame). */
+  private pendingFirst = false;
   private lastFpsWarn = 0;
   private muted = false;
   private sky: ReturnType<typeof createSky>;
@@ -146,13 +156,42 @@ export class Game implements DebugApi {
     this.hud.setVisible(false);
     this.ready = true;
 
+    // Input is sampled once per rendered frame — NOT per fixed simulation
+    // sub-step — because keyboard edges (E, Esc, R) only exist for one frame.
+    this.engine.perFrameInput = () => {
+      this.frameEdges = { restart: this.input.wasPressed('KeyR'), mute: this.input.wasPressed('KeyM'), perf: this.input.wasPressed('F3') };
+      this.pendingInput = this.input.consume();
+      this.pendingFirst = true;
+      return this.pendingInput;
+    };
+
     this.engine.start({
-      update: (dt) => this.fixedUpdate(dt),
-      render: () => this.render(),
+      update: (dt) => {
+        if (!PERF.enabled) {
+          this.fixedUpdate(dt);
+          return;
+        }
+        const t0 = performance.now();
+        this.fixedUpdate(dt);
+        PERF.addUpdate(performance.now() - t0);
+      },
+      render: () => {
+        if (!PERF.enabled) {
+          this.render();
+          return;
+        }
+        const t0 = performance.now();
+        this.render();
+        const info = this.engine.renderer.info.render;
+        PERF.addRender(performance.now() - t0, info.calls, info.triangles);
+        PERF.frame(this.engine.fps);
+      },
       resize: () => {},
     });
 
     window.__MINI_GTA = this;
+    // Read-only performance telemetry for automated tests (?perf=1).
+    Object.defineProperty(window, '__MINI_GTA_PERF', { value: PERF, configurable: true });
   }
 
   /* ------------------------------------------------------------------ */
@@ -178,6 +217,18 @@ export class Game implements DebugApi {
   }
 
   teleport(x: number, z: number): void {
+    // Test convenience: teleporting while driving moves the CAR (so a test can
+    // drive straight to a drop-off instead of simulating a whole route).
+    if (this.activeVehicle) {
+      const v = this.activeVehicle;
+      v.position.set(x, this.world.groundHeight(x, z), z);
+      v.speed = 0.5;
+      return;
+    }
+    // Land on walkable ground: cars/pavements are fine, building interiors are not.
+    const safe = this.world.resolveCircle(x, z, 0.5);
+    x = safe.x;
+    z = safe.z;
     if (this.activeVehicle) this.exitVehicle();
     this.player.setPosition(x, z, this.player.yaw);
     this.cameraRig.snapTo(this.player.position);
@@ -221,7 +272,9 @@ export class Game implements DebugApi {
     this.screens.show(next);
     const showHud = next === 'playing' || next === 'missionResult';
     this.hud.setVisible(showHud);
-    this.engine.paused = next === 'playing';
+    // Pause the simulation only for non-playing statuses; the menu still renders
+    // (camera + world update) so the start screen has a living city behind it.
+    this.engine.paused = next !== 'playing';
     this.input.active = next === 'playing';
     if (next !== 'playing') {
       this.audio.setEngine(0, false);
@@ -310,10 +363,41 @@ export class Game implements DebugApi {
 
   private fixedUpdate(dt: number): void {
     this.frame++;
-    const input = this.input.consume();
+    // Copy the frame's input into this sub-step. Edge flags (jump, interact,
+    // pause, mouse delta) are delivered exactly once per rendered frame; they are
+    // cleared on the first sub-step so a single tap can never fire twice.
+    const pending = this.pendingInput;
+    const input: InputFrame = this.frameInput;
+    input.moveX = pending.moveX;
+    input.moveY = pending.moveY;
+    input.sprint = pending.sprint;
+    input.handbrake = pending.handbrake;
+    input.jump = pending.jump;
+    input.interact = pending.interact;
+    input.pauseToggle = pending.pauseToggle;
+    input.lookX = pending.lookX;
+    input.lookY = pending.lookY;
+    pending.jump = false;
+    pending.interact = false;
+    pending.pauseToggle = false;
+    pending.lookX = 0;
+    pending.lookY = 0;
+    const inputEdges = this.frameEdges;
+    const isFirstStep = this.pendingFirst;
+    this.pendingFirst = false;
+    this.input.age(dt);
     this.elapsed += dt;
     this.interactCooldown = Math.max(0, this.interactCooldown - dt);
 
+    // Hotkeys apply to the first simulation step of each frame.
+    if (isFirstStep) {
+      if (inputEdges.restart && this.gameStatus !== 'menu') {
+        this.restart();
+        return;
+      }
+      if (inputEdges.mute) this.toggleMute();
+      if (inputEdges.perf) this.hud.toast(PERF.toggle() ? 'Performance overlay ON' : 'Performance overlay OFF', 'info', 1.2);
+    }
     if (input.pauseToggle) {
       if (this.gameStatus === 'playing') {
         this.pause();
@@ -418,7 +502,9 @@ export class Game implements DebugApi {
     const lookHeight = this.activeVehicle ? 1.5 : 0;
     anchorPos.y += lookHeight;
     const autoYaw = this.activeVehicle ? facingYaw + Math.PI : null;
-    this.cameraRig.update(anchorPos, 1 / 60, this.lastSpeedRatio, autoYaw);
+    // Slow idle orbit behind the menu so the start screen is alive.
+    if (this.gameStatus !== 'playing') this.cameraRig.yaw += 0.06 * (1 / 60);
+    this.cameraRig.update(anchorPos, 1 / 60, this.gameStatus === 'playing' ? this.lastSpeedRatio : 0, this.gameStatus === 'playing' ? autoYaw : null);
     this.engine.renderer.render(this.engine.scene, this.engine.camera);
     this.updateHud();
   }
@@ -459,33 +545,47 @@ export class Game implements DebugApi {
    * service so nothing overlaps a building or another car.
    */
   private spawnParkedCars(): void {
-    const lot = this.world.pois.parking;
-    if (lot) {
-      const types: VehicleTypeId[] = ['sedan', 'sport', 'van', 'sedan', 'sport', 'sedan'];
-      for (let i = 0; i < types.length; i++) {
-        const col = i % 3;
-        const row = Math.floor(i / 3);
-        const x = lot.x - 8 + col * 8;
-        const z = lot.z - 6 + row * 11;
-        if (this.world.overlapsCircle(x, z, 1.6)) continue;
-        this.vehicles.spawn(this.engine.scene, x, z, row === 0 ? 0 : Math.PI, types[i], { role: 'parked' }, this.world);
+    // The start zone: a street with metres of pavement inside the block plazas
+    // either side, so the player always starts and can always walk to a car.
+    const startZ = ewZ(1) - streetHalfWidth(1) - 2.2;
+    const startX = blockRect(1, 1).cx;
+    const inner = streetHalfWidth(1);
+    const curb = inner - 1.35;
+    const parked: Array<[number, number, VehicleTypeId, number]> = [
+      // [x offset from corridor centre, z, type, yaw]
+      [-6, startZ, 'sedan', Math.PI / 2],
+      [-1, startZ - 26, 'sport', Math.PI / 2],
+      [-7, startZ - 52, 'van', Math.PI / 2],
+      [14, startZ - 9, 'sedan', -Math.PI / 2],
+      [18, startZ - 40, 'sport', -Math.PI / 2],
+    ];
+    for (const [dx, z, type, yaw] of parked) {
+      const x = startX + dx;
+      const onLane = Math.abs(dx) <= inner - 0.5;
+      if (onLane) {
+        // Parked in lane beside the kerb: two lanes each 8 m wide on inner streets.
+        const laneCx = Math.sign(dx) * curb;
+        const span = 8 - 3.4;
+        const offset = Math.max(-span / 2, Math.min(span / 2, dx - laneCx));
+        const px = startX + laneCx + offset;
+        if (this.world.overlapsCircle(px, z, 1.5)) continue;
+        this.vehicles.spawn(this.engine.scene, px, z, yaw, type, { role: 'parked' }, this.world);
+      } else {
+        if (this.world.overlapsCircle(x, z, 1.5)) continue;
+        this.vehicles.spawn(this.engine.scene, x, z, yaw, type, { role: 'parked' }, this.world);
       }
     }
-    // Kerbside cars (inner streets only, offset into the outer parking lane).
-    const kerbside: Array<[number, number, VehicleTypeId, number]> = [
-      [1, 1, 'sport', 0.2],
-      [3, 2, 'van', Math.PI],
-      [2, 3, 'sedan', Math.PI * 0.5],
-      [4, 4, 'sedan', Math.PI],
-    ];
-    for (const [ni, ei, type, yaw] of kerbside) {
-      const half = streetHalfWidth(ni);
-      const x = nsX(ni) + half - 2.2;
-      const z = ewZ(ei) + 24;
-      if (this.world.overlapsCircle(x, z, 1.6) || !this.world.isRoad(x, z)) continue;
-      this.vehicles.spawn(this.engine.scene, x, z, yaw, type, { role: 'parked' }, this.world);
+    // Parking lot bays (block (3,1) plaza ring).
+    const lot = this.world.pois.parking;
+    if (lot) {
+      const types: VehicleTypeId[] = ['sport', 'van', 'sedan'];
+      for (let i = 0; i < types.length; i++) {
+        const x = lot.x + (i - 1) * 6;
+        const z = lot.z + 12;
+        if (this.world.overlapsCircle(x, z, 1.6)) continue;
+        this.vehicles.spawn(this.engine.scene, x, z, 0, types[i], { role: 'parked' }, this.world);
+      }
     }
-    this.hoverCamYaw = 0;
   }
 
   private tryEnterVehicle(): void {
@@ -557,12 +657,8 @@ export class Game implements DebugApi {
       reward: s.reward,
       timeSeconds: this.elapsed,
     };
-    this.hud.showMissionResult(result);
-    this.screens.showMissionResult(
-      result,
-      () => this.continueFreeRoam(),
-      () => this.restart(),
-    );
+    this.hud.showMissionResult(result, { onContinue: () => this.continueFreeRoam(), onRestart: () => this.restart() });
+    this.screens.showMissionResult(result, () => this.continueFreeRoam(), () => this.restart());
   }
 
   private failMission(): void {
@@ -576,7 +672,7 @@ export class Game implements DebugApi {
       reward: 0,
       timeSeconds: this.elapsed,
     };
-    this.hud.showMissionResult(result);
+    this.hud.showMissionResult(result, { onContinue: () => this.continueFreeRoam(), onRestart: () => this.restart() });
     this.screens.showMissionResult(result, () => this.continueFreeRoam(), () => this.restart());
   }
 

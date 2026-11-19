@@ -7,6 +7,10 @@ import type { InputFrame, InputState } from '../contracts';
 export class Input {
   private keys = new Set<string>();
   private pressed = new Set<string>();
+  /** Keys pressed since the last consume (never missed, whatever the frame rate). */
+  private queue: string[] = [];
+  private edgeUntil = 0;
+  private edgeKeys: string[] = [];
   private mouseDX = 0;
   private mouseDY = 0;
   private frame: InputFrame = {
@@ -21,6 +25,8 @@ export class Input {
     lookY: 0,
   };
   active = false;
+  /** Seconds since the last frame with any input (drives camera auto-follow). */
+  afk = 0;
   pointerLocked = false;
   /** Notified when the player releases pointer lock (used to auto-pause). */
   onPointerLockLost: (() => void) | null = null;
@@ -44,7 +50,11 @@ export class Input {
     if (this.active && ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) {
       e.preventDefault();
     }
-    if (!this.keys.has(e.code)) this.pressed.add(e.code);
+    if (!this.keys.has(e.code)) {
+      this.pressed.add(e.code);
+      this.queue.push(e.code);
+      if (this.queue.length > 32) this.queue.shift();
+    }
     this.keys.add(e.code);
   };
 
@@ -55,6 +65,7 @@ export class Input {
   private onBlur = () => {
     this.keys.clear();
     this.pressed.clear();
+    this.queue.length = 0;
   };
 
   private onMouseMove = (e: MouseEvent) => {
@@ -98,22 +109,44 @@ export class Input {
   }
 
   /** Consume edge state. Call once per rendered frame from the game loop. */
+  /**
+   * Consume the frame. Edge flags (`interact`, `pauseToggle`) come from a queue,
+   * so a key press is never lost even if several are pressed between frames.
+   */
   consume(): InputFrame {
     const f = this.frame;
+    const q = this.queue;
+    this.queue = [];
+    // Short taps: keep edge flags alive for a minimum of ~90 ms so a quick
+    // press still reaches a simulation step at low frame rates.
+    const now = performance.now();
+    const edgeFor = (codes: string[]) => {
+      if (q.some((c) => codes.includes(c))) {
+        this.edgeUntil = now + 90;
+        this.edgeKeys = codes;
+      }
+      return now < this.edgeUntil && codes.some((c) => this.edgeKeys.includes(c));
+    };
     const k = this.keys;
     f.moveX = (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0);
     f.moveY = (k.has('KeyW') || k.has('ArrowUp') ? 1 : 0) - (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0);
     f.sprint = k.has('ShiftLeft') || k.has('ShiftRight');
     f.jump = k.has('Space');
-    f.interact = this.pressed.has('KeyE') || this.pressed.has('KeyF');
-    f.pauseToggle = this.pressed.has('Escape') || this.pressed.has('KeyP');
+    f.interact = edgeFor(['KeyE', 'KeyF']);
+    f.pauseToggle = edgeFor(['Escape', 'KeyP']);
     f.handbrake = k.has('Space');
     f.lookX = this.mouseDX * this.mouseSensitivity;
     f.lookY = this.mouseDY * this.mouseSensitivity;
     this.mouseDX = 0;
     this.mouseDY = 0;
+    this.afk = 0;
     this.pressed.clear();
     return f;
+  }
+
+  /** Call once per fixed step with dt to age the idle timer. */
+  age(dt: number): void {
+    this.afk += dt;
   }
 
   /** True if a key was freshly pressed since last consume. For UI screens. */
@@ -129,6 +162,7 @@ export class Input {
   reset(): void {
     this.keys.clear();
     this.pressed.clear();
+    this.queue.length = 0;
     this.mouseDX = 0;
     this.mouseDY = 0;
   }
