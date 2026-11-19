@@ -1,0 +1,29 @@
+{
+  "name": "mini-gta-open-city",
+  "private": true,
+  "version": "1.0.0",
+  "description": "MINI GTA — OPEN CITY: a compact third-person open-city 3D browser game built with TypeScript and Three.js.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "build:fast": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test",
+    "serve:dist": "vite preview --host 127.0.0.1 --port 4173",
+    "package": "bash scripts/package-release.sh"
+  },
+  "dependencies": {
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@types/three": "^0.187.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
+  }
+}
