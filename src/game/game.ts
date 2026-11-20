@@ -606,6 +606,8 @@ export class Game implements DebugApi {
   private firing = false;
   private npcHitPoints = new WeakMap<object, number>();
   private recoil = 0;
+  /** Timestamp of the last mouse-look input (used by the chase camera). */
+  private lastLookAt = 0;
   /** First-run coach: 'walk' → 'vehicle' → 'delivered' → 'done'. */
   private tutorialStep: 'walk' | 'vehicle' | 'delivered' | 'done' = 'walk';
   /**
@@ -654,10 +656,15 @@ export class Game implements DebugApi {
     const anchorPos = this.activeVehicle ? anchor : this.tmpVec.copy(anchor) ;
     const lookHeight = this.activeVehicle ? 1.5 : 0;
     anchorPos.y += lookHeight;
+    // CHASE-CAMERA RULE (on foot and driving): when the mouse has not moved for
+    // ~0.6 s the camera swings behind the direction of travel, so W always means
+    // "forward" from the player's point of view. A recent mouse look overrides it.
+    const playing = this.gameStatus === 'playing';
+    const recentLook = playing && performance.now() - this.lastLookAt < 600;
     const autoYaw = this.activeVehicle ? facingYaw + Math.PI : null;
     // Slow idle orbit behind the menu so the start screen is alive.
-    if (this.gameStatus !== 'playing') this.cameraRig.yaw += 0.06 * (1 / 60);
-    this.cameraRig.update(anchorPos, 1 / 60, this.gameStatus === 'playing' ? this.lastSpeedRatio : 0, this.gameStatus === 'playing' ? autoYaw : null);
+    if (!playing) this.cameraRig.yaw += 0.06 * (1 / 60);
+    this.cameraRig.update(anchorPos, 1 / 60, playing ? this.lastSpeedRatio : 0, autoYaw);
     // Draw directly unless the engine composer will present the frame (then it
     // draws right after this hook). Rendering here also keeps draw-call stats exact.
     if (!this.engine.postActive) this.engine.renderer.render(this.engine.scene, this.engine.camera);

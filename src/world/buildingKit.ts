@@ -28,13 +28,15 @@ export interface BuildingStyle {
   floor: number;
 }
 
+// QA: retuned stone families. The old wall colours ran to ~0.81 linear (0xe8dcc6),
+// which washed the facades out against the sky; these sit in [0.24, 0.75] linear.
 export const BUILDING_STYLES: BuildingStyle[] = [
-  { wall: 0xe8dcc6, trim: 0xfbf6ec, glass: 0x2b3a4a, bay: 3.0, floor: 3.4 }, // limestone office
-  { wall: 0xb8c4cc, trim: 0xe9eef1, glass: 0x22303d, bay: 3.2, floor: 3.6 }, // glass-and-steel
-  { wall: 0xc98d66, trim: 0xf0e3d2, glass: 0x2f2722, bay: 2.8, floor: 3.2 }, // brick warehouse
-  { wall: 0xd6d2cb, trim: 0xffffff, glass: 0x2a3742, bay: 3.0, floor: 3.5 }, // concrete modern
-  { wall: 0x8fa3ad, trim: 0xd9e3e8, glass: 0x1f2b36, bay: 3.4, floor: 3.8 }, // teal curtain wall
-  { wall: 0xd9b48a, trim: 0xf6e6cf, glass: 0x2d2a26, bay: 2.6, floor: 3.1 }, // terracotta
+  { wall: 0xdcd2be, trim: 0xf8f3e8, glass: 0x3a4b5e, bay: 3.0, floor: 3.4 }, // limestone office
+  { wall: 0xbcc7cf, trim: 0xf2f6f9, glass: 0x36495c, bay: 3.2, floor: 3.6 }, // glass-and-steel
+  { wall: 0xcaa488, trim: 0xf7ebdd, glass: 0x3b4a5a, bay: 2.8, floor: 3.2 }, // brick warehouse
+  { wall: 0xd9d5ce, trim: 0xeeeae3, glass: 0x394b5b, bay: 3.0, floor: 3.5 }, // concrete modern
+  { wall: 0xa9b7bf, trim: 0xe3ebef, glass: 0x33465a, bay: 3.4, floor: 3.8 }, // teal curtain wall
+  { wall: 0xd8bda0, trim: 0xfcf1e4, glass: 0x3c4a58, bay: 2.6, floor: 3.1 }, // terracotta
 ];
 
 const tmpColor = new THREE.Color();
@@ -42,7 +44,9 @@ const tmpColor = new THREE.Color();
 function colorize(input: THREE.BufferGeometry, color: number): THREE.BufferGeometry {
   // Merge-friendly: everything non-indexed with the same attribute set.
   const geo = input.index ? input.toNonIndexed() : input;
-  const c = tmpColor.setHex(color);
+  // Hex inputs are sRGB; vertex colours must be LINEAR for the renderer.
+  // THREE.Color.setHex(hex, SRGBColorSpace) converts sRGB → the working (linear) space.
+  const c = tmpColor.setHex(color, THREE.SRGBColorSpace);
   const n = geo.attributes.position.count;
   const arr = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
@@ -52,6 +56,28 @@ function colorize(input: THREE.BufferGeometry, color: number): THREE.BufferGeome
   }
   geo.setAttribute('color', new THREE.BufferAttribute(arr, 3));
   return geo;
+}
+
+/**
+ * Straight, unlit corner faces make a building read as a solid mass from the
+ * street (no floating dark facets, no z-fighting between coplanar boxes).
+ * Cornice/sills are the only protruding relief.
+ */
+/** The stone body slabs of one building (chamfered body + proud parapet lip). */
+export function bodySlabs(spec: BuildingGeoSpec, st: BuildingStyle): THREE.BufferGeometry[] {
+  // Body + parapet (same colour family so the tower reads as one mass). The
+  // parapet is a proud lip: it reads against the sky at street level.
+  const walls: THREE.BufferGeometry[] = [];
+  walls.push(colorize(chamferedSlab(spec.hx * 2, spec.h, spec.hz * 2, 0.34), st.wall));
+  const parapetH = 0.8;
+  const parapetOut = 0.22;
+  walls.push(
+    colorize(
+      chamferedSlab(spec.hx * 2 + parapetOut * 2, parapetH, spec.hz * 2 + parapetOut * 2, 0.18).translate(0, spec.h, 0),
+      st.wall,
+    ),
+  );
+  return walls;
 }
 
 /** Box with its footprint chamfered (bevelled vertical corners). */
@@ -99,8 +125,12 @@ const BASE_HEIGHT = 3.2;
 /** How far the glass sits inside the wall face (metres). */
 const GLASS_RECESS = 0.25;
 /** Glass panel size as a fraction of the bay width / floor height. */
-const GLASS_W = 0.56;
-const GLASS_H = 0.5;
+const GLASS_W = 0.36;
+const GLASS_H = 0.42;
+/** Thickness of the glass slab (its hidden faces sit inside the wall). */
+const GLASS_DEPTH = 0.2;
+/** Depth of the stone sill lip, measured from the wall face outwards. */
+const SILL_DEPTH = 0.22;
 
 /**
  * Builds one merged geometry for a building: the stone/concrete body (with
@@ -108,28 +138,22 @@ const GLASS_H = 0.5;
  */
 export function buildBuildingGeometry(spec: BuildingGeoSpec): { wall: THREE.BufferGeometry; glass: THREE.BufferGeometry; trim: THREE.BufferGeometry } {
   const st = BUILDING_STYLES[spec.style % BUILDING_STYLES.length];
-  const walls: THREE.BufferGeometry[] = [];
+  // The stone body: a chamfered slab plus a proud parapet lip (same family, so
+  // the tower reads as one solid mass from the street).
+  const walls: THREE.BufferGeometry[] = bodySlabs(spec, st);
   const glass: THREE.BufferGeometry[] = [];
   const trims: THREE.BufferGeometry[] = [];
 
-  // Body + parapet (same colour family so the tower reads as one mass).
-  walls.push(colorize(chamferedSlab(spec.hx * 2, spec.h, spec.hz * 2, 0.34), st.wall));
-  const parapetH = 0.7;
-  const parapetIn = 0.3;
-  walls.push(
-    colorize(
-      chamferedSlab(spec.hx * 2 - parapetIn * 2, parapetH, spec.hz * 2 - parapetIn * 2, 0.2).translate(0, spec.h, 0),
-      st.wall,
-    ),
-  );
-  // Cornice: a slim overhanging band just under the parapet.
-  trims.push(colorize(box(spec.hx * 2 + 0.5, 0.42, spec.hz * 2 + 0.5, 0, spec.h - 0.21, 0), st.trim));
-
-  // One even window grid on the four faces: a glass cell + a sill per floor/bay.
-  const ww = Math.max(0.8, st.bay * GLASS_W);
-  const wh = Math.max(1.0, st.floor * GLASS_H);
-  const sillH = 0.12;
-  const sillOut = 0.08;
+  // One even window grid on the four faces: one glass cell + one sill per floor/bay.
+  // Glass size derives from the REAL pitch (an integer number of columns fit the
+  // face), so every building has the same window-to-wall proportion and the stone
+  // body always dominates the frame.
+  // Cornice: a slim light band under the parapet (the classic stone crown), and
+  // a light plinth at pavement level. Both share the sill bucket.
+  trims.push(colorize(box(spec.hx * 2 + 0.55, 0.45, spec.hz * 2 + 0.55, 0, spec.h - 0.225, 0), st.trim));
+  trims.push(colorize(box(spec.hx * 2 + 0.3, 0.7, spec.hz * 2 + 0.3, 0, 0.35, 0), st.trim));
+  const sillH = 0.14;
+  const sillOut = 0.1;
   const floors = Math.max(0, Math.floor((spec.h - BASE_HEIGHT - 0.6) / st.floor));
   // `ry` = rotation about Y for that face (0 faces +Z, PI/2 faces +X, ...).
   const faces: Array<{ ry: number; len: number; nx: number; nz: number; alongX: boolean; half: number }> = [
@@ -140,10 +164,12 @@ export function buildBuildingGeometry(spec: BuildingGeoSpec): { wall: THREE.Buff
   ];
   const rot = new THREE.Matrix4();
   for (const f of faces) {
-    const cols = Math.max(1, Math.floor((f.len - 1.0) / st.bay));
-    // Even spacing: distribute any leftover facade width into equal gaps.
-    const pitch = (f.len - 0.8) / cols;
+    const cols = Math.max(1, Math.floor(f.len / st.bay));
+    // Even spacing: distribute the facade width into equal bays.
+    const pitch = f.len / cols;
     const start = -((cols - 1) * pitch) / 2;
+    const ww = pitch * GLASS_W;
+    const wh = st.floor * GLASS_H;
     const faceX = f.nx * f.half;
     const faceZ = f.nz * f.half;
     for (let fl = 0; fl < floors; fl++) {
@@ -151,7 +177,7 @@ export function buildBuildingGeometry(spec: BuildingGeoSpec): { wall: THREE.Buff
       for (let c = 0; c < cols; c++) {
         const along = start + c * pitch;
         // Glass: recessed into the wall (its outer face is GLASS_RECESS behind).
-        const g = box(ww, wh, 0.2, 0, 0, 0);
+        const g = box(ww, wh, GLASS_DEPTH, 0, 0, 0);
         rot.makeRotationY(f.ry);
         g.applyMatrix4(rot);
         g.translate(
@@ -159,9 +185,9 @@ export function buildBuildingGeometry(spec: BuildingGeoSpec): { wall: THREE.Buff
           cy,
           spec.z + (f.alongX ? 0 : along) + faceZ + f.nz * -GLASS_RECESS,
         );
-        glass.push(g);
+        glass.push(colorize(g, st.glass));
         // Sill: light stone lip just under the opening, proud of the wall.
-        const s = box(ww + 0.3, sillH, 0.16, 0, 0, 0);
+        const s = box(ww + 0.38, sillH, SILL_DEPTH, 0, 0, 0);
         rot.makeRotationY(f.ry);
         s.applyMatrix4(rot);
         s.translate(

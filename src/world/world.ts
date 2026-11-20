@@ -38,7 +38,9 @@ import { BUILDING_STYLES, buildBuildingGeometry } from './buildingKit';
 /** Colour a smooth (non-indexed) geometry for the shared vertex-colour materials. */
 function colorizeCyl(geo: THREE.BufferGeometry, color: number): THREE.BufferGeometry {
   const g = geo.index ? geo.toNonIndexed() : geo;
-  const c = new THREE.Color(color);
+  // Hex colours are authored in sRGB; vertex colours feed the LINEAR renderer.
+  // Without this conversion every surface renders ~1.4x too bright (washed-out look).
+  const c = new THREE.Color().setHex(color, THREE.SRGBColorSpace);
   const n = g.attributes.position.count;
   const arr = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
@@ -70,14 +72,14 @@ export const PLAZA_D = 6;
  * (walkable pavements, car navigation) always matches what players see.
  */
 export const CITY_DRESSING = {
-  /** Every N-th sidewalk lamp spot gets a streetlight (2 = every other). */
-  lampEvery: 2,
+  /** Every N-th sidewalk lamp spot gets a streetlight (3 = every third). */
+  lampEvery: 3,
   /** Every N-th sidewalk lamp spot gets a bench (0 = off). */
   benchEvery: 0,
   /** Every N-th sidewalk lamp spot gets a hydrant (0 = off). */
   hydrantEvery: 0,
   /** Every N-th sidewalk lamp spot gets a tree (0 = off). */
-  treeEvery: 3,
+  treeEvery: 4,
   /** Every N-th sidewalk lamp spot gets a traffic light. */
   trafficLightEvery: 1,
   /** Fraction of building rooftops that carry plant (AC unit / tank / mast). */
@@ -121,7 +123,9 @@ const PALETTE = {
   wall: 0x6f6a60,
 };
 
-const FACADES = [0xd9c8a9, 0xc4805b, 0x8fa3b8, 0x6e8f7d, 0xe0d3c0, 0x9e8fa8, 0xb75c4a, 0x7d8fa8, 0xcbb68f, 0x5f7f9f];
+// Clean stone/concrete leftovers — used for facade colours only. Every channel
+// stays in the linear band [0.2, 0.75] so no building renders as a dark slab.
+const FACADES = [0xd9c8a9, 0xbc9678, 0x8fa3b8, 0x8aa593, 0xe0d3c0, 0x9e8fa8, 0xc48a7c, 0x7d8fa8, 0xcbb68f, 0x809fbd];
 const GLASS = 0x34424f;
 const ROOF = 0x5c5a55;
 
@@ -193,7 +197,8 @@ function buildBuildings(): BuildingDef[] {
 }
 
 function colorize(geo: THREE.BufferGeometry, color: number): THREE.BufferGeometry {
-  const c = new THREE.Color(color);
+  // sRGB → linear (see colorizeCyl): vertex colours must be linear-space.
+  const c = new THREE.Color().setHex(color, THREE.SRGBColorSpace);
   const n = geo.attributes.position.count;
   const arr = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
@@ -475,13 +480,16 @@ export class City implements CityWorld {
       }
     }
     // Facades: matte stone/concrete that picks up sky light (see FACADE_LIGHTING)
-    // so walls stay brighter than the sky behind them.
-    this.add(walls, new THREE.MeshStandardMaterial({
+    // so walls stay brighter than the sky behind them. The material is created
+    // right here and used for nothing else: the stone body must never share a
+    // bucket with the cornice/sill trim (which is a lighter, brighter family).
+    const facadeMaterial = new THREE.MeshStandardMaterial({
       vertexColors: true,
       roughness: 0.72,
       metalness: 0.0,
       envMapIntensity: FACADE_LIGHTING.envIntensity,
-    }), true);
+    });
+    this.add(walls, facadeMaterial, true);
     // Glass: dark, glossy, reflects the sky so the grid reads as windows.
     this.add(glassGeos, new THREE.MeshStandardMaterial({
       vertexColors: true,
