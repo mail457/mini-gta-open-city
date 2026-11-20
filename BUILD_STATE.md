@@ -5,6 +5,10 @@
 - **Game:** complete and playable. All original requirements implemented and verified.
 - **Tests:** `npm run typecheck` ✅ · `npm test` 31/31 ✅ · `npx playwright test` 18/18 (Chromium + WebKit) ✅
 - **Artifacts:** `dist/` (production build), `release/MINI-GTA-OPEN-CITY-v1.0.0.zip` (336 KB, self-contained).
+- **LIVE URL:** https://mini-gta-open-city.onrender.com (Render static site, verified playing + full mission in
+  Chromium and WebKit). Source: https://github.com/mail457/mini-gta-open-city.
+- **Graphics (v1.1 pass):** shader sky with sun disk, procedural sky environment lighting, MSAA + bloom + colour
+  grade post-processing, richer skyline; `G` toggles high/low. Firefox on M1: 120 FPS.
 - **Blocked / needs the user:**
   1. **Public HTTPS URL.** `gh` has only `repo` scope → only *private* repos can be created, and a private repo's
      Pages site is private. Anonymous Netlify drops are password-protected until claimed. →

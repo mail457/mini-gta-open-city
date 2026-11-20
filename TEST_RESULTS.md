@@ -17,7 +17,9 @@ Recorded 2026-11-20 · macOS (Apple silicon) · Node 24.22.3 · npm 11.19.1
 | Firefox | Playwright Firefox 159, real GPU | ✅ PASS — 120 FPS, 0 console errors, mission step OK | |
 | Single-file edition (`release/MINI-GTA-OPEN-CITY-STANDALONE.html`, opened via `file://`) | Playwright Chromium + WebKit | ✅ PASS — start screen → PLAY → full mission complete ($1,449 / $1,446), 0 errors | |
 | Blank-page guard (`dist/index.html` opened via `file://`) | Playwright Chromium + WebKit | ✅ PASS — explicit "must be opened differently" explanation, no blank page | |
-| Live HTTPS URL | anonymous-host deploys | ❌ **BLOCKED** — see "Deployment status" | requires user's hosting account |
+| **Live HTTPS URL** | `LIVE_URL=https://mini-gta-open-city.onrender.com npx playwright test tests/e2e/live.spec.ts` | ✅ PASS — boots and plays in Chromium **and** WebKit | https://mini-gta-open-city.onrender.com |
+| **Live URL — full mission** | live-mission spec (Chromium + WebKit) | ✅ PASS — mission complete, overlay, $1,449 / $1,445 | both engines |
+| Graphics pass | Firefox on M1 GPU | ✅ 120 FPS, 0 errors, draw calls 166, triangles ~48 k | bloom + MSAA + grade on |
 
 ## End-to-end tests (Playwright)
 
@@ -79,9 +81,14 @@ Software rendering is GPU-bound (the JS side costs ~2 ms/frame); on real hardwar
 2. A classic inline boot watchdog in `index.html` — if the game cannot boot (file:// block, no WebGL, other failure)
    the page now shows a readable explanation instead of a blank screen. Verified over `file://` in both engines.
 
-## Deployment status
+## Deployment status — LIVE
 
-Anonymous deploy attempts (no account ownership) produce HTTPS URLs but the sites are **password-protected until claimed** (Netlify drop) or require login (surge). A GitHub **public** repository could not be created because this session's `gh` token has only `repo` scope (private repositories). Therefore **no public live URL exists yet**; `docs/DEPLOYMENT.md` documents five one-step hosting options and the ready-made `dist/` and ZIP are verified to run from any static server.
+- **URL:** https://mini-gta-open-city.onrender.com (Render static site, HTTPS, auto-deployed from the `render-build` branch).
+- **Repository:** https://github.com/mail457/mini-gta-open-city (public; `main` = source, `render-build` = production `dist`).
+- Render credentials live outside the repository in `~/.config/mini-gta/render.env` (chmod 600) and are never logged.
+- Known trade-off: Render's **free tier spins a static site down after inactivity**; the first visit may take
+  30–60 s to wake. Subsequent loads are fast. To update the site: `npm run build`, commit `dist` to the
+  `render-build` branch (a push triggers an automatic deploy).
 
 ## Known limitations (not release blockers)
 

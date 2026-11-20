@@ -1,5 +1,10 @@
 # Publishing MINI GTA — OPEN CITY on the web (HTTPS)
 
+> **Current live site:** <https://mini-gta-open-city.onrender.com> — Render static site, deployed from the
+> `render-build` branch of <https://github.com/mail457/mini-gta-open-city>. Render credentials are kept in
+> `~/.config/mini-gta/render.env` (never committed). Free static sites sleep after inactivity: the first
+> visit can take 30–60 s, later loads are instant. The options below remain as alternatives.
+
 The production build in `dist/` is a **plain static site**: HTML + JS + CSS, no server logic,
 no accounts, no database. Anything that serves files over HTTPS will host it.
 
