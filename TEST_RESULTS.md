@@ -15,6 +15,8 @@ Recorded 2026-11-20 · macOS (Apple silicon) · Node 24.22.3 · npm 11.19.1
 | Production build served | `npm run build && npm run preview`, Playwright `production.spec.ts` | ✅ PASS | assets 200 + correct MIME, boots clean |
 | Distribution ZIP | `npm run package` → extracted to a clean folder, served with `python3 -m http.server` | ✅ PASS — plays in Chromium **and** WebKit, 0 errors | `release/MINI-GTA-OPEN-CITY-v1.0.0.zip` (336 KB, 81 files) |
 | Firefox | Playwright Firefox 159, real GPU | ✅ PASS — 120 FPS, 0 console errors, mission step OK | |
+| Single-file edition (`release/MINI-GTA-OPEN-CITY-STANDALONE.html`, opened via `file://`) | Playwright Chromium + WebKit | ✅ PASS — start screen → PLAY → full mission complete ($1,449 / $1,446), 0 errors | |
+| Blank-page guard (`dist/index.html` opened via `file://`) | Playwright Chromium + WebKit | ✅ PASS — explicit "must be opened differently" explanation, no blank page | |
 | Live HTTPS URL | anonymous-host deploys | ❌ **BLOCKED** — see "Deployment status" | requires user's hosting account |
 
 ## End-to-end tests (Playwright)
@@ -67,6 +69,15 @@ Software rendering is GPU-bound (the JS side costs ~2 ms/frame); on real hardwar
 | Med | Shadow type removed in three r187 | `PCFShadowMap` |
 | Med | Catch-up frames after start teleported the player | Clamp per-substep physics dt; engine dt guards |
 | Low | NPC cars were shadow+texture heavy | Ped shadows off, 30 Hz NPC AI, instanced windows (30 k quads → 1 draw) |
+
+## Post-release fix — blank page from `dist/index.html` (reported by the user)
+
+**Cause:** browsers block ES-module `<script type="module">` and stylesheet loads from `file://` pages
+("origin null" CORS), so the production page rendered nothing. This was reproduced in Chromium and WebKit.
+**Fixes shipped:**
+1. `MINI-GTA-OPEN-CITY-STANDALONE.html` — everything (JS + CSS) inlined into one page that runs from a double-click.
+2. A classic inline boot watchdog in `index.html` — if the game cannot boot (file:// block, no WebGL, other failure)
+   the page now shows a readable explanation instead of a blank screen. Verified over `file://` in both engines.
 
 ## Deployment status
 

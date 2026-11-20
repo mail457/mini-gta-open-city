@@ -17,9 +17,11 @@ No account, no install, no plugins. Just open the page and press **PLAY**.
 ## Play it
 
 - **Online:** open the URL in `PLAY.txt` / your deployment (see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
-- **Locally, without Node:** unzip `MINI-GTA-OPEN-CITY-v1.0.0.zip`, then either
-  - double-click `dist/index.html` (works in Chrome and Safari — the build uses relative paths), or
-  - for the most faithful experience, serve the folder: `cd dist && python3 -m http.server 8000` and open <http://localhost:8000>.
+- **Locally, without Node:** unzip `MINI-GTA-OPEN-CITY-v1.0.0.zip`, then
+  - **double-click `MINI-GTA-OPEN-CITY-STANDALONE.html`** — one self-contained file, plays straight from disk in Chrome or Safari, or
+  - serve the normal web build: `cd dist && python3 -m http.server 8000` → <http://localhost:8000>.
+    (Opening `dist/index.html` straight from disk does **not** work: browsers block ES-module scripts on `file://`
+    pages. That page now explains this instead of staying blank.)
 - **From source:** `npm install && npm run dev` → <http://127.0.0.1:5173>.
 
 ## Controls
@@ -66,6 +68,7 @@ npm test             # unit tests (Vitest)
 npm run test:e2e     # browser tests (Playwright: Chromium + WebKit/Safari engine)
 npm run build        # typecheck + production build into dist/
 npm run preview      # serve dist/ on http://127.0.0.1:4173
+npm run build:standalone  # single-file edition -> release/MINI-GTA-OPEN-CITY-STANDALONE.html
 npm run package      # build + create release/MINI-GTA-OPEN-CITY-v1.0.0.zip
 ```
 

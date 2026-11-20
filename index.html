@@ -13,6 +13,46 @@
       <canvas id="game-canvas" aria-label="Game viewport"></canvas>
       <div id="ui-root"></div>
     </div>
+    <script>
+      // Classic inline script (never blocked): installs the boot watchdog so a
+      // browser that cannot run the game shows an explanation, not a blank page.
+      (function () {
+        var BOOT_TIMEOUT_MS = 6000;
+        function show(kind, detail) {
+          if (document.getElementById('boot-problem')) return;
+          var root = document.getElementById('ui-root') || document.body;
+          var heading = kind === 'no-webgl' ? 'WebGL is not available'
+            : kind === 'blocked' ? 'This copy of the game must be opened differently'
+            : 'The game could not start';
+          var body = kind === 'blocked'
+            ? 'The browser blocked the game files because they were opened directly from disk. Use the single-file version ' +
+              '(MINI-GTA-OPEN-CITY-STANDALONE.html), which plays straight from a double-click, or serve the folder over http, ' +
+              'for example: cd dist &amp;&amp; python3 -m http.server 8000 and open http://localhost:8000'
+            : kind === 'no-webgl'
+              ? 'Enable hardware acceleration in your browser settings and reload (Chrome: Settings &#8594; System &#8594; ' +
+                '&ldquo;Use graphics acceleration when available&rdquo;). The game needs WebGL2 or WebGL1.'
+              : 'An unexpected error stopped the game from loading. Please reload the page.';
+          var box = document.createElement('div');
+          box.id = 'boot-problem';
+          box.setAttribute('style', 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:2rem;background:linear-gradient(160deg,#070a12,#111726);color:#eef2f8;font-family:system-ui,-apple-system,"Segoe UI",sans-serif');
+          box.innerHTML = '<div style="max-width:640px;background:rgba(20,26,40,.92);border:1px solid rgba(255,255,255,.12);border-radius:18px;padding:28px 32px">' +
+            '<p style="margin:0 0 6px;font:800 12px/1 system-ui;letter-spacing:.3em;text-transform:uppercase;color:#ffcf3f">MINI GTA &mdash; OPEN CITY</p>' +
+            '<h1 style="margin:0 0 12px;font-size:26px">' + heading + '</h1>' +
+            '<p style="margin:0;color:#c8d3e6;line-height:1.55;font-size:15px">' + body + '</p>' +
+            '<p style="margin:16px 0 0;color:#7f8ca3;font-size:12px;font-family:ui-monospace,Menlo,monospace">' + detail + '</p></div>';
+          root.appendChild(box);
+        }
+        window.setTimeout(function () {
+          if (window.__MINI_GTA) return;
+          var canWebgl = false;
+          try { var c = document.createElement('canvas'); canWebgl = !!(c.getContext('webgl2') || c.getContext('webgl')); } catch (e) {}
+          if (!canWebgl) show('no-webgl', 'no WebGL context · ' + navigator.userAgent);
+          else if (location.protocol === 'file:') show('blocked', 'module scripts are blocked for file:// pages (browser CORS)');
+          else show('failed', 'boot watchdog timed out after ' + (BOOT_TIMEOUT_MS / 1000) + 's');
+        }, BOOT_TIMEOUT_MS);
+      })();
+    </script>
+    <noscript><p style="color:#fff;font-family:sans-serif;padding:2rem">MINI GTA needs JavaScript enabled.</p></noscript>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

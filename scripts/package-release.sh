@@ -13,11 +13,15 @@ trap 'rm -rf "$STAGE"' EXIT
 echo "▶ Type-checking and building…"
 npm run build
 
+echo "▶ Building the single-file (double-click) edition…"
+node scripts/build-standalone.mjs
+
 echo "▶ Staging ${NAME}"
 mkdir -p "$OUT" "$STAGE/$NAME"
 cp -R dist "$STAGE/$NAME/dist"
 cp README.md LICENSE "$STAGE/$NAME/"
 cp -R docs "$STAGE/$NAME/docs"
+cp "release/MINI-GTA-OPEN-CITY-STANDALONE.html" "$STAGE/$NAME/"
 cp -R src "$STAGE/$NAME/src"
 cp package.json package-lock.json tsconfig.json vite.config.ts vitest.config.ts playwright.config.ts index.html "$STAGE/$NAME/"
 cp -R tests scripts .github "$STAGE/$NAME/"
@@ -26,15 +30,15 @@ cp PLAN.md ARCHITECTURE.md TASKS.md TEST_RESULTS.md RELEASE_CHECKLIST.md "$STAGE
 cat > "$STAGE/$NAME/PLAY.txt" <<'TXT'
 MINI GTA — OPEN CITY
 ====================
-How to play (no installation required):
+How to play — pick ONE of these:
 
-1. Double-click  dist/index.html   (Chrome or Safari).
-   - Everything is bundled in dist/; the folder must stay together.
+A) EASIEST: double-click  MINI-GTA-OPEN-CITY-STANDALONE.html
+   It is a single self-contained file: no server, no install, plays in Chrome or Safari.
 
-   Best result (avoids some browsers' file:// restrictions on audio/mouse capture):
-   open Terminal in this folder and run:
+B) The normal web build (dist/): browsers block its ES-module scripts when the page
+   is opened straight from disk, so serve the folder:
        cd dist && python3 -m http.server 8000
-   then open  http://localhost:8000  in your browser.
+   then open  http://localhost:8000 .  (You can also just upload dist/ to any web host.)
 
 2. Press PLAY.
 3. Controls: WASD move/drive · Mouse look · Shift sprint · Space jump/handbrake
