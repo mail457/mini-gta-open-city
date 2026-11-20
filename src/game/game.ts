@@ -100,7 +100,7 @@ export class Game implements DebugApi {
     moveX: 0, moveY: 0, sprint: false, jump: false, interact: false,
     pauseToggle: false, handbrake: false, lookX: 0, lookY: 0,
   };
-  private frameEdges = { restart: false, mute: false, perf: false };
+  private frameEdges = { restart: false, mute: false, perf: false, graphics: false };
   private pendingInput: InputFrame = { ...this.frameInput };
   /** True once until the next per-frame input pump (first sub-step of a frame). */
   private pendingFirst = false;
@@ -170,7 +170,12 @@ export class Game implements DebugApi {
     // Input is sampled once per rendered frame — NOT per fixed simulation
     // sub-step — because keyboard edges (E, Esc, R) only exist for one frame.
     this.engine.perFrameInput = () => {
-      this.frameEdges = { restart: this.input.wasPressed('KeyR'), mute: this.input.wasPressed('KeyM'), perf: this.input.wasPressed('F3') };
+      this.frameEdges = {
+        restart: this.input.wasPressed('KeyR'),
+        mute: this.input.wasPressed('KeyM'),
+        perf: this.input.wasPressed('F3'),
+        graphics: this.input.wasPressed('KeyG'),
+      };
       this.pendingInput = this.input.consume();
       this.pendingFirst = true;
       return this.pendingInput;
@@ -187,18 +192,23 @@ export class Game implements DebugApi {
         PERF.addUpdate(performance.now() - t0);
       },
       render: () => {
-        if (!PERF.enabled) {
-          this.render();
-          return;
-        }
-        const t0 = performance.now();
         this.render();
-        const info = this.engine.renderer.info.render;
-        PERF.addRender(performance.now() - t0, info.calls, info.triangles);
-        PERF.frame(this.engine.fps);
+        if (!PERF.enabled) return;
+        const st = this.engine.perfStats;
+        PERF.addRender(st.render, st.submit, st.drawCalls, st.triangles);
+        PERF.frame();
       },
       resize: () => {},
     });
+
+    // Engine-side per-frame bookkeeping (runs after the real render + GPU sync).
+    this.engine.onPostRender = () => {
+      if (!PERF.enabled) return;
+      const st = this.engine.perfStats;
+      this.renderCount++;
+      PERF.addRender(st.render, st.submit, st.drawCalls, st.triangles);
+      PERF.frame();
+    };
 
     window.__MINI_GTA = this;
     // Read-only performance telemetry for automated tests (?perf=1).
@@ -273,7 +283,7 @@ export class Game implements DebugApi {
   }
 
   frameCount(): number {
-    return this.frame;
+    return this.engine.currentFrame;
   }
 
   snapshot(): DebugSnapshot {
@@ -291,7 +301,7 @@ export class Game implements DebugApi {
       npcCount: this.npcs.minimapData().peds.length,
       vehicleCount: this.allVehicles().length,
       buildings: this.world.stats().buildings,
-      drawCalls: this.engine.renderer.info.render.calls,
+      drawCalls: this.engine.lastDrawCalls || this.engine.perfStats.drawCalls,
       fps: this.engine.fps,
     };
   }
@@ -334,6 +344,12 @@ export class Game implements DebugApi {
     this.setStatus('menu');
     this.hud.setVisible(false);
     this.hud.clearMissionResult();
+  }
+
+  /** Quality: 'high' (bloom + grade + MSAA) or 'low' (direct render, fastest). */
+  setGraphics(q: 'high' | 'low'): void {
+    this.engine.setQuality(q);
+    this.hud.toast(q === 'high' ? 'Graphics: HIGH (bloom, MSAA, grade)' : 'Graphics: LOW (performance)', 'info', 1.6);
   }
 
   private toggleMute(): void {
@@ -398,7 +414,8 @@ export class Game implements DebugApi {
   }
 
   private fixedUpdate(dt: number): void {
-    this.frame++;
+    // NOTE: `this.frame` counts simulation sub-steps; `frameCount()` below returns
+    // the engine's rendered-frame counter, which is what tests expect.
     // Copy the frame's input into this sub-step. Edge flags (jump, interact,
     // pause, mouse delta) are delivered exactly once per rendered frame; they are
     // cleared on the first sub-step so a single tap can never fire twice.
@@ -447,6 +464,7 @@ export class Game implements DebugApi {
       }
       if (inputEdges.mute) this.toggleMute();
       if (inputEdges.perf) this.hud.toast(PERF.toggle() ? 'Performance overlay ON' : 'Performance overlay OFF', 'info', 1.2);
+      if (inputEdges.graphics) this.setGraphics(this.engine.quality === 'high' ? 'low' : 'high');
     }
     if (input.pauseToggle) {
       if (this.gameStatus === 'playing') {
@@ -533,6 +551,9 @@ export class Game implements DebugApi {
   private lastMoney = 0;
   private previousMoney = 0;
   private npcTick = 0;
+  private renderCount = 0;
+  private lastDrawCalls = 0;
+  private lastTriangles = 0;
   /** Cleared on teleport; kept for scripted repositioning safety. */
   private lastExited: { vehicle: Vehicle; at: number } | null = null;
   private controlsReturnTo: GameStatus = 'menu';
@@ -568,7 +589,13 @@ export class Game implements DebugApi {
     // Slow idle orbit behind the menu so the start screen is alive.
     if (this.gameStatus !== 'playing') this.cameraRig.yaw += 0.06 * (1 / 60);
     this.cameraRig.update(anchorPos, 1 / 60, this.gameStatus === 'playing' ? this.lastSpeedRatio : 0, this.gameStatus === 'playing' ? autoYaw : null);
-    this.engine.renderer.render(this.engine.scene, this.engine.camera);
+    // Draw directly unless the engine composer will present the frame (then it
+    // draws right after this hook). Rendering here also keeps draw-call stats exact.
+    if (!this.engine.postActive) this.engine.renderer.render(this.engine.scene, this.engine.camera);
+    const inf = this.engine.renderer.info.render;
+    // Only trust the counters right after OUR direct render.
+    this.engine.lastDrawCalls = inf.calls;
+    this.engine.lastTriangles = inf.triangles;
     this.updateHud();
   }
 

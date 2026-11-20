@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createSkyDome, SKY_HORIZON, SUN_DIR } from '../core/postfx';
 
 /**
  * Sky dome, sun (directional light + shadows) and aerial fog.
@@ -15,35 +16,14 @@ export function createSky(scene: THREE.Scene): SkyRig {
   const group = new THREE.Group();
   group.name = 'sky';
 
-  // --- Gradient sky dome (vertex colours, single draw call) ---------------
-  const skyGeo = new THREE.SphereGeometry(450, 24, 16);
-  const colors: number[] = [];
-  const top = new THREE.Color(0x2f6fb5);
-  const horizon = new THREE.Color(0xf4c98a);
-  const pos = skyGeo.attributes.position;
-  const c = new THREE.Color();
-  for (let i = 0; i < pos.count; i++) {
-    const y = pos.getY(i) / 450; // -1..1
-    const t = Math.pow(Math.max(0, y), 0.55);
-    c.copy(horizon).lerp(top, t);
-    colors.push(c.r, c.g, c.b);
-  }
-  skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  const skyMat = new THREE.MeshBasicMaterial({
-    vertexColors: true,
-    side: THREE.BackSide,
-    depthWrite: false,
-    fog: false,
-    toneMapped: false,
-  });
-  const sky = new THREE.Mesh(skyGeo, skyMat);
-  sky.renderOrder = -1000;
-  sky.name = 'skyDome';
+  // --- Shader sky dome (sun disk, haze, gradient) ---
+  const sky = createSkyDome(480);
   group.add(sky);
 
   // --- Sun ----------------------------------------------------------------
   const sun = new THREE.DirectionalLight(0xfff0d4, 2.6);
-  sun.position.set(90, 120, 60);
+  // Sun direction matches the sky shader's sun disk and the environment map.
+  sun.position.copy(SUN_DIR).multiplyScalar(150);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.camera.near = 10;
@@ -65,8 +45,9 @@ export function createSky(scene: THREE.Scene): SkyRig {
   group.add(hemi);
 
   scene.add(group);
-  scene.background = new THREE.Color(0x9ab9d9);
-  scene.fog = new THREE.Fog(0xbcc9d6, 120, 330);
+  scene.background = new THREE.Color(SKY_HORIZON);
+  // Aerial perspective: haze that warms toward the horizon colour.
+  scene.fog = new THREE.FogExp2(new THREE.Color(SKY_HORIZON).lerp(new THREE.Color(0xbcc9d6), 0.55).getHex(), 0.0038);
 
   const sunBase = sun.position.clone();
   let t = 0;
@@ -83,8 +64,8 @@ export function createSky(scene: THREE.Scene): SkyRig {
     },
     dispose() {
       scene.remove(group);
-      skyGeo.dispose();
-      skyMat.dispose();
+      sky.geometry.dispose();
+      (sky.material as THREE.Material).dispose();
     },
   };
 }

@@ -12,7 +12,8 @@ test('HUD shows money, health, minimap, mission panel and a speedometer when dri
   await expect(money).toContainText('$');
 
   const missionPanel = page.getByTestId('mission-panel');
-  await expect(missionPanel).toBeVisible();
+  // The panel appears once the mission is armed (first simulation frame).
+  await expect(missionPanel).toBeVisible({ timeout: 30_000 });
   await expect(missionPanel).toContainText(/delivery|courier|vehicle|package/i);
 
   // Minimap draws actual pixels (background grid + dots).

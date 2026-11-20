@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createPostFX, createSkyEnvironment, type PostFX, type Quality } from './postfx';
 
 /** Adaptive renderer + fixed-ish timestep loop. Owned by: Lead. */
 
@@ -33,6 +34,19 @@ export class Engine {
   private highFpsTime = 0;
   private readonly fixedStep = 1 / 60;
   onFpsSample: ((fps: number) => void) | null = null;
+  /** Rendering quality tier (auto-downgraded on slow devices). */
+  quality: Quality = 'high';
+  /** Set when the post-processing pipeline cannot be created (old GPUs) — then
+   *  the engine falls back to rendering directly through the game hook. */
+  postFailed = false;
+  private postfx: PostFX | null = null;
+  /** Scene background/fog colour used as a fallback when post is off. */
+  onPostRender: (() => void) | null = null;
+  /** Per-frame render timings (ms) for the perf probe. */
+  perfStats = { render: 0, submit: 0, post: 0, synthWait: 0, drawCalls: 0, triangles: 0 };
+  /** Draw calls of the latest direct scene render (updated by the game hook). */
+  lastDrawCalls = 0;
+  lastTriangles = 0;
   /** Optional per-frame input pump, called once before the fixed sub-steps. */
   perFrameInput: (() => unknown) | null = null;
 
@@ -63,9 +77,39 @@ export class Engine {
     this.camera = new THREE.PerspectiveCamera(62, 1, 0.1, 600);
     this.camera.position.set(0, 6, 12);
 
+    this.initEnvironment();
     this.resize();
     window.addEventListener('resize', this.onResize);
     window.addEventListener('orientationchange', this.onResize);
+  }
+
+  /** Sky lighting for all PBR materials (procedural, no HDR download). */
+  private initEnvironment(): void {
+    try {
+      this.scene.environment = createSkyEnvironment(this.renderer);
+      this.scene.environmentIntensity = 0.55;
+    } catch {
+      this.scene.environment = null;
+    }
+  }
+
+  /** Switch rendering quality at runtime (called by the HUD / auto-downgrade). */
+  setQuality(q: Quality): void {
+    if (q === this.quality && this.postfx) return;
+    this.quality = q;
+    if (q === 'low') {
+      this.postfx?.dispose();
+      this.postfx = null;
+      this.renderer.setRenderTarget(null);
+      return;
+    }
+    this.postfx ??= createPostFX(this.renderer, this.scene, this.camera, q);
+    this.postfx.setQuality(q);
+  }
+
+  /** Render path used by the post compositor when post-processing is active. */
+  get postActive(): boolean {
+    return this.postfx !== null;
   }
 
   get currentFrame(): number {
@@ -91,10 +135,25 @@ export class Engine {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
+    this.postfx?.setSize(w, h, this.currentPixelRatio);
     this.hooks?.resize(w, h);
   }
 
   /** Dynamic resolution: drop pixel ratio if we can't hold ~45fps, raise it when we can. */
+  /** Enable post-processing once the renderer is alive (first resize already done). */
+  private ensurePost(): void {
+    if (!this.postfx && this.quality === 'high') {
+      try {
+        this.postfx = createPostFX(this.renderer, this.scene, this.camera, 'high');
+        this.postfx.setSize(window.innerWidth, window.innerHeight, this.currentPixelRatio);
+      } catch {
+        this.quality = 'low';
+        this.postfx = null;
+        this.postFailed = true;
+      }
+    }
+  }
+
   private adaptQuality(avgDt: number): void {
     const dt = avgDt;
     const lowTarget = 1 / 45;
@@ -105,6 +164,12 @@ export class Engine {
     } else if (dt < highTarget) {
       this.highFpsTime += dt;
       this.lowFpsTime = 0;
+    }
+    // Persistent slowness: drop bloom/post-processing first, then resolution.
+    if (this.lowFpsTime > 4 && this.quality === 'high') {
+      this.setQuality('low');
+      this.lowFpsTime = 0;
+      return;
     }
     if (this.lowFpsTime > 2 && this.currentPixelRatio > 0.85) {
       this.currentPixelRatio = Math.max(0.8, this.currentPixelRatio - 0.25);
@@ -159,7 +224,31 @@ export class Engine {
         // Never accumulate a backlog after a stall (spiral-of-death protection).
         if (steps >= maxSteps) this.accumulator = 0;
       }
+      if (this.frame === 2) this.ensurePost();
+      const t0 = performance.now();
+      // Draw-call counters: the game hook re-records a direct scene render while
+      // the composer is active; that context is not expensive (it is never presented).
+      this.renderer.info.reset();
+      // Always run the game render hook (camera + HUD bookkeeping). When the
+      // composer is active it draws the frame right after; otherwise the hook
+      // already drew it.
       this.hooks?.render();
+      if (this.postfx) this.postfx.render(this.scene, this.camera);
+      const t1 = performance.now();
+      // Force the GPU to finish this frame so frame stats include real GPU time
+      // (timer queries also keep Firefox from under-delivering rAF callbacks).
+      const gl = this.renderer.getContext();
+      gl.finish();
+      const t2 = performance.now();
+      // Keep the last real sample: the only renderer available here is the
+      // post-processing composer, whose info block does not report scene draws.
+      this.perfStats.render = t1 - t0;
+      this.perfStats.submit = t2 - t1;
+      if (!this.postfx) {
+        this.perfStats.drawCalls = this.lastDrawCalls || this.renderer.info.render.calls;
+        this.perfStats.triangles = this.lastTriangles || this.renderer.info.render.triangles;
+      }
+      this.onPostRender?.();
     };
     this.raf = requestAnimationFrame(tick);
   }

@@ -232,7 +232,7 @@ export class City implements CityWorld {
         strips.push(plane(half * 2, half * 2, nsX(s), 0.012, ewZ(j), PALETTE.asphalt));
       }
     }
-    this.add(strips, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }), false);
+    this.add(strips, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.72, metalness: 0.08 }), false);
 
     // Lane dashes + centre lines + crosswalks (all instanced-ish via merged boxes).
     const dashGeos: THREE.BufferGeometry[] = [];
@@ -353,11 +353,32 @@ export class City implements CityWorld {
       // Roofline.
       roofGeos.push(box(b.hx * 2 + 0.6, 0.6, b.hz * 2 + 0.6, b.x, h + 0.3, b.z, ROOF));
       if (b.roof === 'stepped') {
+        // Art-deco setback tower: two shrinking tiers on top.
         roofGeos.push(box(b.hx * 1.2, 3, b.hz * 1.2, b.x, h + 2, b.z, b.color));
+        roofGeos.push(box(b.hx * 0.6, 4.5, b.hz * 0.6, b.x, h + 5.7, b.z, b.color));
+        roofGeos.push(box(0.25, 4, 0.25, b.x, h + 9.5, b.z, 0xb8bcc2));
       } else if (b.roof === 'antenna') {
-        roofGeos.push(box(0.3, 6, 0.3, b.x, h + 3.3, b.z, 0x9aa0a6));
+        roofGeos.push(box(b.hx * 0.7, 1.4, b.hz * 0.7, b.x, h + 0.7, b.z, ROOF));
+        roofGeos.push(box(0.22, 8, 0.22, b.x, h + 5.4, b.z, 0x9aa0a6));
+        roofGeos.push(box(1.4, 0.15, 0.15, b.x, h + 7, b.z, 0x9aa0a6));
       } else {
+        // Classic rooftop clutter: AC units and a water tank.
         roofGeos.push(box(2.2, 1.2, 2.2, b.x + b.hx * 0.4, h + 1.2, b.z - b.hz * 0.3, 0x8a8a86));
+        roofGeos.push(box(1.6, 0.9, 1.6, b.x - b.hx * 0.45, h + 1.05, b.z + b.hz * 0.35, 0x7d858c));
+        if (b.h > 18) {
+          const r = Math.min(1.5, b.hx * 0.22);
+          roofGeos.push(box(r * 2, 2.6, r * 2, b.x - b.hx * 0.1, h + 1.9, b.z - b.hz * 0.1, 0x6f5d4c));
+          roofGeos.push(box(r * 2.2, 0.25, r * 2.2, b.x - b.hx * 0.1, h + 3.3, b.z - b.hz * 0.1, 0x5a4b3d));
+        }
+      }
+      // Balcony bands on mid-rise buildings: thin ledge lines that read well in sun.
+      if (h > 14 && h < 40) {
+        const bands = Math.floor((h - 4) / 6);
+        for (let f = 1; f <= bands; f++) {
+          const y = 4 + f * 6 - 1.2;
+          roofGeos.push(box(b.hx * 2 + 0.5, 0.18, 0.35, b.x, y, b.z + b.hz + 0.2, 0xd9d4c8));
+          roofGeos.push(box(b.hx * 2 + 0.5, 0.18, 0.35, b.x, y, b.z - b.hz - 0.2, 0xd9d4c8));
+        }
       }
       // Collider (full footprint, from ground to roof).
       this.colliders.push({ x: b.x, z: b.z, hx: b.hx, hz: b.hz, height: h, kind: 'building' });
@@ -369,7 +390,18 @@ export class City implements CityWorld {
         }
       }
     }
-    this.add(facades, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78 }), true);
+    // Facades vary stone roughness slightly by material family so the sun creates
+    // soft falloff instead of a flat plate of colour.
+    this.add(
+      facades,
+      new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.62,
+        metalness: 0.06,
+        envMapIntensity: 0.85,
+      }),
+      true,
+    );
     // Windows: one InstancedMesh for the whole city (see world/windows.ts).
     const win = createWindows(
       defs.map((d) => ({ x: d.x, z: d.z, hx: d.hx, hz: d.hz, h: d.h })),
@@ -448,7 +480,7 @@ export class City implements CityWorld {
     this.instanced(poleGeo, new THREE.MeshStandardMaterial({ color: 0x3c4148, roughness: 0.6 }), lampSpots);
     this.instanced(
       headGeo,
-      new THREE.MeshStandardMaterial({ color: 0xffe9b0, emissive: 0xffc861, emissiveIntensity: 0.6, roughness: 0.4 }),
+      new THREE.MeshStandardMaterial({ color: 0xffe9b0, emissive: 0xffc861, emissiveIntensity: 1.6, roughness: 0.4 }),
       lampSpots,
     );
     for (const s of lampSpots) this.colliders.push({ x: s.x, z: s.z, hx: 0.18, hz: 0.18, kind: 'prop' });
@@ -487,7 +519,7 @@ export class City implements CityWorld {
     const sidewalkTrees = spots.filter((_, i) => i % 7 === 3);
     for (const s of sidewalkTrees) treeSpots.push({ x: s.x, z: s.z, s: 0.8 });
     this.instanced(trunkGeo, new THREE.MeshStandardMaterial({ color: 0x6b4a2e, roughness: 1 }), treeSpots);
-    this.instanced(canopyGeo, new THREE.MeshStandardMaterial({ color: 0x3f8a3a, roughness: 1, flatShading: true }), treeSpots, true);
+    this.instanced(canopyGeo, new THREE.MeshStandardMaterial({ color: 0x3f8a3a, roughness: 0.85, flatShading: true, envMapIntensity: 0.6 }), treeSpots, true);
     for (const s of treeSpots) this.colliders.push({ x: s.x, z: s.z, hx: 0.4, hz: 0.4, kind: 'prop' });
 
     // Traffic lights at every intersection corner (poles + heads).
