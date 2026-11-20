@@ -481,6 +481,7 @@ export class NpcSystem implements NPCSystemApi {
       const z = node.z;
 
       const bodyGroup = new THREE.Group();
+      bodyGroup.name = 'traffic-body';
       const ci = i % CAR_COLORS.length;
       const hull = new THREE.Mesh(this.carGeos[1 + ci * 2], this.carMat);
       hull.position.y = 0.62;
@@ -561,6 +562,8 @@ export class NpcSystem implements NPCSystemApi {
     const isVan = false;
     const mesh = new THREE.Group();
     mesh.name = 'traffic-nearby';
+    const bodyGroup = new THREE.Group();
+    bodyGroup.name = 'traffic-body';
     const hull = new THREE.Mesh(this.carGeos[1], this.carMat);
     hull.position.y = 0.62;
     const cabin = new THREE.Mesh(this.carGeos[2], this.carMat);
@@ -578,7 +581,8 @@ export class NpcSystem implements NPCSystemApi {
     wheels.fr.position.set(sx, 0.34, -sz);
     wheels.rl.position.set(-sx, 0.34, sz);
     wheels.rr.position.set(-sx, 0.34, -sz);
-    mesh.add(hull, cabin, wheels.fl, wheels.fr, wheels.rl, wheels.rr);
+    bodyGroup.add(hull, cabin);
+    mesh.add(bodyGroup, wheels.fl, wheels.fr, wheels.rl, wheels.rr);
     mesh.position.set(node.x, 0, node.z);
     mesh.rotation.y = 0;
     this.group.add(mesh);

@@ -1,0 +1,9 @@
+# Anonymous drop deploys do not support headers/redirects or non-site files.
+_headers
+_redirects
+netlify.toml
+.gitignore
+.netlifyignore
+__MACOSX
+.DS_Store
+*.map

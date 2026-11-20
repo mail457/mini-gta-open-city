@@ -45,13 +45,23 @@ src/
     styles.css        W-4    All UI styling
   game/
     game.ts           LEAD   Game state machine + integration of all systems
+  game/sky.ts          LEAD   sky dome, sun + shadow rig
+  game/vehicleDetail.ts LEAD   contact shadows, headlight glow
+  world/windows.ts     LEAD   instanced façade windows
+  core/probe.ts        LEAD   opt-in perf probe (?perf=1 / F3)
 tests/
-  unit/*.test.ts      W-4    Vitest pure-logic tests
-  e2e/*.spec.ts       W-4    Playwright browser tests
-scripts/package-release.sh   W-4   ZIP release
+  unit/*.test.ts             Vitest pure-logic tests (31 tests)
+  e2e/*.spec.ts              Playwright browser tests (9 specs × Chromium + WebKit)
+  e2e/helpers.ts             state-polling helpers
+scripts/package-release.sh   build + distributable ZIP
+.github/workflows/deploy.yml GitHub Pages CI
 ```
 
 **Disjoint file ownership** ⇒ zero write conflicts between the four parallel workers.
+
+> Delivery note: all four worker processes terminated early during M2. Their code was recovered from their staging
+> folders and integrated by the Lead, who also authored the World layer (`world.ts`, `cityLayout.ts`), `menu.ts`,
+> the Playwright suite and the packaging/deployment tooling. Ownership above reflects the *final* state of the tree.
 
 ## Runtime data flow (one fixed step)
 
@@ -74,3 +84,17 @@ See `src/contracts.ts`. Key invariants:
 - Vehicle-vs-vehicle collisions are resolved by `VehicleSystem`/`stepDriven` using vehicle AABBs supplied by Agent 2.
 - Traffic never leaves road lanes; pedestrians never leave sidewalk/plaza walkways.
 - Mission waypoints always map to drivable road or walkable ground.
+
+## Runtime facts worth knowing when modifying the code
+
+- **Fixed 60 Hz simulation** inside a render loop; `dt` is clamped (0.1 s) and catch-up is capped at 3 substeps per frame.
+- **Input is sampled once per rendered frame** (`Engine.perFrameInput`) and copied into each substep. Edge flags
+  (E, Esc, Space, mouse delta) are consumed on the first substep; taps are latched ~140 ms so they survive slow frames.
+  `Input` keeps a press queue so a key press can never be lost between frames.
+- **Vehicles do not drive on pavements**: the world is `isRoad(x,z)`-aware and the vehicle solver pushes cars back
+  onto the road; buildings and boundary walls remain the hard colliders.
+- **Draw-call budget**: ~20 city meshes, 1 instanced window mesh, instanced props; vehicles and NPCs dominate.
+  Pedestrians do not cast shadows; NPC AI ticks at 30 Hz.
+- **Headless quirk:** Chromium (headless, with or without SwiftShader) throttles `requestAnimationFrame` for a fully
+  occluded, static WebGL frame — the menu can appear frozen to an automated test while the page is otherwise idle.
+  Real browsers (Firefox/WebKit verified) render it normally.

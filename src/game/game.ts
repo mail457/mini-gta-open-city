@@ -32,6 +32,8 @@ import { PERF } from '../core/probe';
 import { createWorld } from '../world/world';
 import { Player } from '../entities/player';
 import { VehicleSystem } from '../entities/vehicles';
+import { createVehicleMesh } from '../entities/vehicleModels';
+import { addContactShadow, addHeadlightGlow } from './vehicleDetail';
 import { createNPCSystem } from '../gameplay/npcs';
 import { createMission } from '../gameplay/mission';
 import { GameState } from '../gameplay/gameState';
@@ -125,7 +127,7 @@ export class Game implements DebugApi {
 
     this.player = new Player(scene, this.world);
     this.vehicleOwnership = 'world';
-    this.vehicles = new VehicleSystem(scene);
+    this.vehicles = new VehicleSystem(scene, this.world);
     this.spawnParkedCars();
 
     this.npcs = createNPCSystem(scene, this.world);
@@ -228,6 +230,8 @@ export class Game implements DebugApi {
   }
 
   teleport(x: number, z: number): void {
+    // A fresh teleport must not re-enter the car the player just left.
+    this.lastExited = null;
     // A teleport is a scripted jump: never let a tap from just before it fire here.
     this.interactLatchedUntil = 0;
     this.pauseLatchedUntil = 0;
@@ -350,7 +354,7 @@ export class Game implements DebugApi {
     this.disposeVehicleSystems();
     this.mission = createMission(this.world);
     this.engine.scene.add(this.mission.group);
-    this.vehicles = new VehicleSystem(this.engine.scene);
+    this.vehicles = new VehicleSystem(this.engine.scene, this.world);
     this.spawnParkedCars();
     this.vehicleOwnership = 'world';
     this.npcs = createNPCSystem(this.engine.scene, this.world);
@@ -529,6 +533,8 @@ export class Game implements DebugApi {
   private lastMoney = 0;
   private previousMoney = 0;
   private npcTick = 0;
+  /** Cleared on teleport; kept for scripted repositioning safety. */
+  private lastExited: { vehicle: Vehicle; at: number } | null = null;
   private controlsReturnTo: GameStatus = 'menu';
   /** Frames to skip on the mission clock while the renderer catches up after start. */
   private simClockSettle = 0;
@@ -575,8 +581,8 @@ export class Game implements DebugApi {
     const data: HudData = {
       playerHealth: this.state.health,
       money: this.state.money,
-      speedKmh: v ? Math.abs(v.speed) * 3.6 : 0,
-      inVehicle: !!v,
+      speedKmh: v && v.driven ? Math.abs(v.speed) * 3.6 : 0,
+      inVehicle: !!(v && v.driven),
       mission,
       distanceToWaypoint: wp ? Math.hypot(wp.x - playerPos.x, wp.z - playerPos.z) : null,
       minimap: {
@@ -626,10 +632,10 @@ export class Game implements DebugApi {
         const offset = Math.max(-span / 2, Math.min(span / 2, dx - laneCx));
         const px = startX + laneCx + offset;
         if (this.world.overlapsCircle(px, z, 1.5)) continue;
-        this.vehicles.spawn(this.engine.scene, px, z, yaw, type, { role: 'parked' }, this.world);
+        this.dress(this.vehicles.spawn(this.engine.scene, px, z, yaw, type, { role: 'parked' }, this.world));
       } else {
         if (this.world.overlapsCircle(x, z, 1.5)) continue;
-        this.vehicles.spawn(this.engine.scene, x, z, yaw, type, { role: 'parked' }, this.world);
+        this.dress(this.vehicles.spawn(this.engine.scene, x, z, yaw, type, { role: 'parked' }, this.world));
       }
     }
     // Parking lot bays (block (3,1) plaza ring).
@@ -640,26 +646,41 @@ export class Game implements DebugApi {
         const x = lot.x + (i - 1) * 6;
         const z = lot.z + 12;
         if (this.world.overlapsCircle(x, z, 1.6)) continue;
-        this.vehicles.spawn(this.engine.scene, x, z, 0, types[i], { role: 'parked' }, this.world);
+        this.dress(this.vehicles.spawn(this.engine.scene, x, z, 0, types[i], { role: 'parked' }, this.world));
       }
     }
+  }
+
+  /** Contact shadow + headlight pools for a vehicle (cheap, one draw each). */
+  private dress(v: Vehicle): void {
+    addContactShadow(v);
+    addHeadlightGlow(v);
   }
 
   private tryEnterVehicle(): void {
     if (!this.player.isGrounded) return;
     const p = this.player.position;
+    // A car you just got out of stays "yours" for a moment: E hops straight back in
+    // (it is often slightly farther than a car parked right against the kerb).
     let best: Vehicle | null = null;
     let bestD = Infinity;
-    for (const v of this.allVehicles()) {
-      const d = Math.hypot(v.position.x - p.x, v.position.z - p.z);
-      // Pick the nearest car whose centre is within ~4 m (generous but not teleport-y).
-      if (d < 4.2 && d < bestD) {
-        best = v;
-        bestD = d;
+    const now = performance.now();
+    const last = this.lastExited;
+    if (last && now - last.at < 4000 && Math.hypot(last.vehicle.position.x - p.x, last.vehicle.position.z - p.z) < 4.2) {
+      best = last.vehicle;
+      bestD = 0;
+    }
+    if (!best) {
+      for (const v of this.allVehicles()) {
+        const d = Math.hypot(v.position.x - p.x, v.position.z - p.z);
+        // Pick the nearest car whose centre is within ~4 m (generous but not teleport-y).
+        if (d < 4.2 && d < bestD) {
+          best = v;
+          bestD = d;
+        }
       }
     }
     if (!best) return;
-    if (best.role !== 'traffic' && Math.abs(best.speed) > 2) return; // parked cars only stand still
     if (best.role === 'traffic') {
       // "Jacking" a moving car in software rendering is all but impossible for the
       // automated tests and unfair in a real jam: throttle the car down as you grab
@@ -669,6 +690,20 @@ export class Game implements DebugApi {
       best.lateralSpeed = 0;
     }
     best.role = 'player';
+    // Traffic meshes are lighter than the drivable models: swap in the full
+    // model (with wheels, lights, shadow) the moment the player takes the car.
+    if (best.shape === 'traffic') {
+      best.mesh.parent?.remove(best.mesh);
+      const detailed = createVehicleMesh(best.spec);
+      detailed.position.copy(best.mesh.position);
+      detailed.rotation.y = best.yaw;
+      this.engine.scene.add(detailed);
+      best.mesh = detailed;
+      this.dress(best);
+      // Visual state is keyed per Vehicle; clear it so wheels/lights re-bind
+      // to the new mesh on the next update.
+      this.vehicles.visualState.delete(best);
+    }
     best.driven = true;
     this.activeVehicle = best;
     this.player.onFoot = false;
@@ -684,7 +719,19 @@ export class Game implements DebugApi {
     const v = this.activeVehicle;
     if (!v) return;
     // Try the left side first, then right; pick a spot outside walls.
-    const cands = [v.exitSide('left'), v.exitSide('right')];
+    // Prefer a spot outside the car's own footprint (otherwise "get out" drops you
+    // inside the collision shape and you cannot re-enter where you stand).
+    const fx = -Math.sin(v.yaw);
+    const fz = -Math.cos(v.yaw);
+    const side = v.spec.width / 2 + 1.0;
+    const cands = [
+      v.exitSide('left'),
+      v.exitSide('right'),
+      { x: v.position.x + Math.cos(v.yaw) * side, z: v.position.z - Math.sin(v.yaw) * side },
+      { x: v.position.x - Math.cos(v.yaw) * side, z: v.position.z + Math.sin(v.yaw) * side },
+      { x: v.position.x - fx * (v.spec.length / 2 + 1.0), z: v.position.z - fz * (v.spec.length / 2 + 1.0) },
+      { x: v.position.x + fx * (v.spec.length / 2 + 1.0), z: v.position.z + fz * (v.spec.length / 2 + 1.0) },
+    ];
     let spot: XZ = this.world.resolveCircle(cands[0].x, cands[0].z, 0.55);
     for (const c of cands) {
       if (!this.world.inBounds(c.x, c.z, 0.6)) continue;
@@ -695,10 +742,23 @@ export class Game implements DebugApi {
     v.driven = false;
     v.role = 'parked';
     v.speed = 0;
+    // Mid-mission: the car you just left is the one the waypoint points at.
+    const miss = this.mission.state;
+    if (miss.waypoint && (miss.phase === 'getVehicle' || miss.phase === 'deliver')) {
+      miss.waypoint = { x: v.position.x, z: v.position.z };
+      miss.waypointRadius = Math.max(miss.waypointRadius || 0, 6);
+    }
     this.activeVehicle = null;
     this.player.onFoot = true;
     this.player.object.visible = true;
+    // Your car is the nearest vehicle from now on: point the mission at where you
+    // are standing (radius covers the car), so the waypoint never drifts away.
     this.player.setPosition(spot.x, spot.z, v.yaw + Math.PI / 2);
+    const miss2 = this.mission.state;
+    if (miss2.waypoint && (miss2.phase === 'getVehicle' || miss2.phase === 'deliver')) {
+      miss2.waypoint = { x: this.player.position.x, z: this.player.position.z };
+      miss2.waypointRadius = 2.5;
+    }
     this.cameraRig.setMode('foot');
     this.hoverCamYaw = this.cameraRig.yaw;
     this.audio.play('exitCar');

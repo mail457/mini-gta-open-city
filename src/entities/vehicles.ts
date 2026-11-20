@@ -20,7 +20,8 @@
  */
 
 import * as THREE from 'three';
-import type { CollisionService, InputFrame, Vehicle, VehiclePhysicsApi, VehicleSpec, VehicleTypeId, XZ } from '../contracts';
+import type {
+  CityWorld, CollisionService, InputFrame, Vehicle, VehiclePhysicsApi, VehicleSpec, VehicleTypeId, XZ } from '../contracts';
 import { clamp, dampAngle } from '../core/utils';
 import { createVehicleMesh, disposeVehicleMesh, getVehicleMeshData, type VehicleMeshData } from './vehicleModels';
 
@@ -140,13 +141,17 @@ export class VehicleSystem implements VehiclePhysicsApi {
   /** All vehicles in the world (parked + traffic + player's car). */
   readonly vehicles: Vehicle[] = [];
   readonly scene: THREE.Scene;
+  private readonly world: CityWorld | null;
 
   // Scratch state for visuals (allocation-free per frame).
-  private readonly visualState = new WeakMap<Vehicle, VisualState>();
+  /** Per-vehicle visual state; cleared when a vehicle's mesh is replaced. */
+  readonly visualState = new WeakMap<Vehicle, VisualState>();
   private readonly tmp: THREE.Vector3 = new THREE.Vector3();
 
-  constructor(scene: THREE.Scene) {
+  /** Optional world: used to keep vehicles on the road instead of on pavements. */
+  constructor(scene: THREE.Scene, world?: CityWorld) {
     this.scene = scene;
+    this.world = world ?? null;
   }
 
   /* ---------------------------------------------------------------------- */
@@ -384,8 +389,18 @@ export class VehicleSystem implements VehiclePhysicsApi {
           const cx = centres[i * 2];
           const cz = centres[i * 2 + 1];
           const p = world.resolveCircle(cx, cz, r);
-          const dx = p.x - cx;
-          const dz = p.z - cz;
+          let dx = p.x - cx;
+          let dz = p.z - cz;
+          // Cars do not hop kerbs: if this circle would end up on pavement, push it
+          // back towards the road instead (the building colliders still stop real walls).
+          if (!dx && !dz && this.world && !this.world.isRoad(p.x, p.z)) {
+            const back = this.world.isRoad(v.position.x, v.position.z)
+              ? { x: v.position.x - p.x, z: v.position.z - p.z }
+              : { x: -vx, z: -vz };
+            const bl = Math.hypot(back.x, back.z) || 1;
+            dx = (back.x / bl) * 0.25;
+            dz = (back.z / bl) * 0.25;
+          }
           if (dx !== 0 || dz !== 0) {
             v.position.x += dx;
             v.position.z += dz;
