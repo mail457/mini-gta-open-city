@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { createPostFX, createSkyEnvironment, type PostFX, type Quality } from './postfx';
+import { createPostFX, type PostFX, type Quality } from './postfx';
+import { createStudioEnvironment } from './models';
 
 /** Adaptive renderer + fixed-ish timestep loop. Owned by: Lead. */
 
@@ -86,8 +87,8 @@ export class Engine {
   /** Sky lighting for all PBR materials (procedural, no HDR download). */
   private initEnvironment(): void {
     try {
-      this.scene.environment = createSkyEnvironment(this.renderer);
-      this.scene.environmentIntensity = 0.55;
+      this.scene.environment = createStudioEnvironment(this.renderer);
+      this.scene.environmentIntensity = 0.6;
     } catch {
       this.scene.environment = null;
     }

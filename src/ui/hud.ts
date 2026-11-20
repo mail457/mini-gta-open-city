@@ -254,6 +254,8 @@ export const HUD_TESTIDS = {
   result: 'mission-result',
   continueBtn: 'continue-button',
   restartBtn: 'restart-button',
+  prompt: 'action-prompt',
+  hint: 'objective-hint',
 } as const;
 
 export function createHud(root: HTMLElement, options: HudOptions = {}): HudController {
@@ -431,7 +433,23 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): HudContr
   toasts.setAttribute('aria-live', 'polite');
   toasts.setAttribute('aria-atomic', 'false');
 
-  hudRoot.append(tr, missionPanel, compass, minimap, speedo, toasts);
+  const hintEl = document.createElement('p');
+  hintEl.className = 'mg-hint';
+  hintEl.dataset.testid = HUD_TESTIDS.hint;
+  hintEl.hidden = true;
+  hudRoot.appendChild(hintEl);
+
+  /* ------------------------ Context action prompt ------------------------- */
+  const prompt = document.createElement('div');
+  prompt.className = 'mg-prompt';
+  prompt.dataset.testid = HUD_TESTIDS.prompt;
+  prompt.hidden = true;
+  const promptKey = document.createElement('span');
+  promptKey.className = 'mg-prompt-key';
+  const promptText = document.createElement('span');
+  promptText.className = 'mg-prompt-text';
+  prompt.append(promptKey, promptText);
+  hudRoot.append(tr, missionPanel, prompt, compass, minimap, speedo, toasts);
 
   /* ---------------------------- Mission result ----------------------------- */
 
@@ -898,6 +916,26 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): HudContr
       updateHealth(data.playerHealth);
       startMission(data);
       updateSpeedo(data);
+      // Context action prompt (E to enter / exit) — the single most important hint.
+      const p = data.prompt ?? null;
+      if (p && p.text) {
+        if (prompt.hidden) prompt.hidden = false;
+        setText(promptKey, p.key || 'E');
+        setText(promptText, p.text);
+        prompt.classList.add('mg-on');
+      } else if (!prompt.hidden) {
+        prompt.hidden = true;
+        prompt.classList.remove('mg-on');
+      }
+      // Objective help line (lives just under the mission panel).
+      const hintText = data.hint ?? '';
+      if (hintText) {
+        if (!hintEl.parentElement) hudRoot.appendChild(hintEl);
+        setText(hintEl, hintText);
+        if (hintEl.hidden) hintEl.hidden = false;
+      } else if (!hintEl.hidden) {
+        hintEl.hidden = true;
+      }
       const label = typeof data.timeOfDayLabel === 'string' ? data.timeOfDayLabel : '';
       if (cached.clock !== label) {
         cached.clock = label;

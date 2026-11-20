@@ -99,10 +99,19 @@ export function createScreens(root: HTMLElement, cb: ScreenCallbacks): MenuScree
   const actions = document.createElement('div');
   actions.className = 'mg-actions';
   actions.append(playBtn, controlsBtn);
+  // Essential keys, shown before the player even starts.
+  const quick = document.createElement('div');
+  quick.className = 'mg-quickkeys';
+  for (const [keys, label] of [['WASD', 'walk / drive'], ['Mouse', 'look'], ['E', 'enter / exit car'], ['Esc', 'pause']] as Array<[string, string]>) {
+    const item = document.createElement('span');
+    item.className = 'mg-quickkey';
+    item.append(kbd(keys), document.createTextNode(label));
+    quick.append(item);
+  }
   const footer = document.createElement('p');
   footer.className = 'mg-fine mg-footer';
-  footer.textContent = 'Runs in your browser · WASD + mouse · headphones on';
-  startScreen.append(panel([kicker, title, subtitle, rule, copy, actions, footer]));
+  footer.textContent = 'Runs in your browser · no download · headphones on';
+  startScreen.append(panel([kicker, title, subtitle, rule, copy, quick, actions, footer]));
   owned.push(startScreen);
 
   /* ------------------------------ Controls ------------------------------- */

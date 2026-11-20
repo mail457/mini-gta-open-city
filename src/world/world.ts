@@ -33,7 +33,23 @@ import {
   pushOutOfRect,
 } from './cityLayout';
 import { makeRng } from '../core/utils';
-import { createWindows } from './windows';
+import { BUILDING_STYLES, buildBuildingGeometry } from './buildingKit';
+
+/** Colour a smooth (non-indexed) geometry for the shared vertex-colour materials. */
+function colorizeCyl(geo: THREE.BufferGeometry, color: number): THREE.BufferGeometry {
+  const g = geo.index ? geo.toNonIndexed() : geo;
+  const c = new THREE.Color(color);
+  const n = g.attributes.position.count;
+  const arr = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    arr[i * 3] = c.r;
+    arr[i * 3 + 1] = c.g;
+    arr[i * 3 + 2] = c.b;
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+  g.deleteAttribute('uv');
+  return g;
+}
 
 const BOUNDS = { minX: WORLD_MIN, maxX: WORLD_MAX, minZ: WORLD_MIN, maxZ: WORLD_MAX };
 
@@ -344,44 +360,45 @@ export class City implements CityWorld {
   }
 
   private buildBuildings(defs: BuildingDef[]): void {
-    const facades: THREE.BufferGeometry[] = [];
-    const windows: THREE.BufferGeometry[] = [];
+    const walls: THREE.BufferGeometry[] = [];
+    const glassGeos: THREE.BufferGeometry[] = [];
+    const trimGeos: THREE.BufferGeometry[] = [];
     const roofGeos: THREE.BufferGeometry[] = [];
+    const rngStyle = makeRng(1234);
     for (const b of defs) {
+      // Smooth, bevelled facade with recessed window bays and cornices.
+      const geo = buildBuildingGeometry({
+        x: b.x,
+        z: b.z,
+        hx: b.hx,
+        hz: b.hz,
+        h: b.h,
+        style: Math.floor(rngStyle() * BUILDING_STYLES.length),
+      });
+      geo.wall.translate(0, 0, 0);
+      walls.push(geo.wall);
+      glassGeos.push(geo.glass);
+      trimGeos.push(geo.trim);
+      // Rooftop plant, kept low-poly but smooth-shaded.
       const h = b.h;
-      facades.push(box(b.hx * 2, h, b.hz * 2, b.x, h / 2, b.z, b.color));
-      // Roofline.
-      roofGeos.push(box(b.hx * 2 + 0.6, 0.6, b.hz * 2 + 0.6, b.x, h + 0.3, b.z, ROOF));
-      if (b.roof === 'stepped') {
-        // Art-deco setback tower: two shrinking tiers on top.
-        roofGeos.push(box(b.hx * 1.2, 3, b.hz * 1.2, b.x, h + 2, b.z, b.color));
-        roofGeos.push(box(b.hx * 0.6, 4.5, b.hz * 0.6, b.x, h + 5.7, b.z, b.color));
-        roofGeos.push(box(0.25, 4, 0.25, b.x, h + 9.5, b.z, 0xb8bcc2));
-      } else if (b.roof === 'antenna') {
-        roofGeos.push(box(b.hx * 0.7, 1.4, b.hz * 0.7, b.x, h + 0.7, b.z, ROOF));
-        roofGeos.push(box(0.22, 8, 0.22, b.x, h + 5.4, b.z, 0x9aa0a6));
-        roofGeos.push(box(1.4, 0.15, 0.15, b.x, h + 7, b.z, 0x9aa0a6));
-      } else {
-        // Classic rooftop clutter: AC units and a water tank.
-        roofGeos.push(box(2.2, 1.2, 2.2, b.x + b.hx * 0.4, h + 1.2, b.z - b.hz * 0.3, 0x8a8a86));
-        roofGeos.push(box(1.6, 0.9, 1.6, b.x - b.hx * 0.45, h + 1.05, b.z + b.hz * 0.35, 0x7d858c));
-        if (b.h > 18) {
-          const r = Math.min(1.5, b.hx * 0.22);
-          roofGeos.push(box(r * 2, 2.6, r * 2, b.x - b.hx * 0.1, h + 1.9, b.z - b.hz * 0.1, 0x6f5d4c));
-          roofGeos.push(box(r * 2.2, 0.25, r * 2.2, b.x - b.hx * 0.1, h + 3.3, b.z - b.hz * 0.1, 0x5a4b3d));
-        }
+      const unit = new THREE.CylinderGeometry(1.1, 1.1, 1.0, 16);
+      unit.translate(b.x + b.hx * 0.35, h + 1.0, b.z - b.hz * 0.25);
+      roofGeos.push(colorizeCyl(unit, 0x9aa3aa));
+      if (h > 22) {
+        const tank = new THREE.CylinderGeometry(1.1, 1.1, 2.4, 16);
+        tank.translate(b.x - b.hx * 0.3, h + 1.7, b.z + b.hz * 0.3);
+        roofGeos.push(colorizeCyl(tank, 0x8d7a63));
+        const roof = new THREE.ConeGeometry(1.25, 0.5, 16);
+        roof.translate(b.x - b.hx * 0.3, h + 3.15, b.z + b.hz * 0.3);
+        roofGeos.push(colorizeCyl(roof, 0x6f5d4c));
       }
-      // Balcony bands on mid-rise buildings: thin ledge lines that read well in sun.
-      if (h > 14 && h < 40) {
-        const bands = Math.floor((h - 4) / 6);
-        for (let f = 1; f <= bands; f++) {
-          const y = 4 + f * 6 - 1.2;
-          roofGeos.push(box(b.hx * 2 + 0.5, 0.18, 0.35, b.x, y, b.z + b.hz + 0.2, 0xd9d4c8));
-          roofGeos.push(box(b.hx * 2 + 0.5, 0.18, 0.35, b.x, y, b.z - b.hz - 0.2, 0xd9d4c8));
-        }
+      if (b.roof === 'antenna') {
+        const mast = new THREE.CylinderGeometry(0.06, 0.1, 9, 8);
+        mast.translate(b.x, h + 5, b.z);
+        roofGeos.push(colorizeCyl(mast, 0xb9c0c6));
       }
-      // Collider (full footprint, from ground to roof).
-      this.colliders.push({ x: b.x, z: b.z, hx: b.hx, hz: b.hz, height: h, kind: 'building' });
+      // Collision footprint (the bevelled wall sits slightly inside the box).
+      this.colliders.push({ x: b.x, z: b.z, hx: b.hx - 0.15, hz: b.hz - 0.15, height: h, kind: 'building' });
       if (import.meta.env?.DEV) {
         for (const pz of this.plazas) {
           if (b.x + b.hx > pz.minX && b.x - b.hx < pz.maxX && b.z + b.hz > pz.minZ && b.z - b.hz < pz.maxZ) {
@@ -390,30 +407,26 @@ export class City implements CityWorld {
         }
       }
     }
-    // Facades vary stone roughness slightly by material family so the sun creates
-    // soft falloff instead of a flat plate of colour.
-    this.add(
-      facades,
-      new THREE.MeshStandardMaterial({
-        vertexColors: true,
-        roughness: 0.62,
-        metalness: 0.06,
-        envMapIntensity: 0.85,
-      }),
-      true,
-    );
-    // Windows: one InstancedMesh for the whole city (see world/windows.ts).
-    const win = createWindows(
-      defs.map((d) => ({ x: d.x, z: d.z, hx: d.hx, hz: d.hz, h: d.h })),
-      makeRng(5150),
-    );
-    if (win) {
-      this.group.add(win.mesh);
-      this.disposables.push({ dispose: () => win.dispose() } as unknown as THREE.BufferGeometry);
-      this.tris += win.count * 2;
-    }
-    void windows;
-    this.add(roofGeos, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }), false);
+    // Facades: smooth normals + soft stone sheen so sun wraps and glass reflects sky.
+    this.add(walls, new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.68,
+      metalness: 0.04,
+      envMapIntensity: 0.9,
+    }), true);
+    this.add(glassGeos, new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.08,
+      metalness: 0.65,
+      envMapIntensity: 1.4,
+    }), false);
+    this.add(trimGeos, new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.55,
+      metalness: 0.05,
+      envMapIntensity: 0.8,
+    }), false);
+    this.add(roofGeos, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.25 }), false);
   }
 
   /** Place instanced meshes for repeated props. */
@@ -472,7 +485,7 @@ export class City implements CityWorld {
     const lampMats = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6 });
 
     // Streetlights: pole + head
-    const poleGeo = new THREE.CylinderGeometry(0.09, 0.12, 5.2, 6);
+    const poleGeo = new THREE.CylinderGeometry(0.08, 0.13, 5.2, 12);
     poleGeo.translate(0, 2.6, 0);
     const headGeo = new THREE.BoxGeometry(0.5, 0.22, 1.1);
     headGeo.translate(0, 5.2, 0.35);
@@ -496,16 +509,16 @@ export class City implements CityWorld {
     for (const s of benchSpots) this.colliders.push({ x: s.x, z: s.z, hx: 1.1, hz: 0.3, kind: 'prop' });
 
     // Hydrants
-    const hydrantGeo = new THREE.CylinderGeometry(0.18, 0.22, 0.7, 6);
+    const hydrantGeo = new THREE.CylinderGeometry(0.18, 0.22, 0.7, 16);
     hydrantGeo.translate(0, 0.35, 0);
     const hydrantSpots = spots.filter((_, i) => i % 9 === 4);
     this.instanced(hydrantGeo, new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 0.7 }), hydrantSpots);
     for (const s of hydrantSpots) this.colliders.push({ x: s.x, z: s.z, hx: 0.25, hz: 0.25, kind: 'prop' });
 
     // Park trees + sidewalk trees
-    const trunkGeo = new THREE.CylinderGeometry(0.22, 0.3, 2.4, 6);
+    const trunkGeo = new THREE.CylinderGeometry(0.18, 0.3, 2.4, 12);
     trunkGeo.translate(0, 1.2, 0);
-    const canopyGeo = new THREE.IcosahedronGeometry(1.9, 0);
+    const canopyGeo = new THREE.IcosahedronGeometry(1.9, 2);
     canopyGeo.translate(0, 3.8, 0);
     const treeSpots: Array<{ x: number; z: number; s?: number }> = [];
     const park = blockRect(2, 2);
@@ -519,11 +532,11 @@ export class City implements CityWorld {
     const sidewalkTrees = spots.filter((_, i) => i % 7 === 3);
     for (const s of sidewalkTrees) treeSpots.push({ x: s.x, z: s.z, s: 0.8 });
     this.instanced(trunkGeo, new THREE.MeshStandardMaterial({ color: 0x6b4a2e, roughness: 1 }), treeSpots);
-    this.instanced(canopyGeo, new THREE.MeshStandardMaterial({ color: 0x3f8a3a, roughness: 0.85, flatShading: true, envMapIntensity: 0.6 }), treeSpots, true);
+    this.instanced(canopyGeo, new THREE.MeshStandardMaterial({ color: 0x4a9445, roughness: 0.9, envMapIntensity: 0.6 }), treeSpots, true);
     for (const s of treeSpots) this.colliders.push({ x: s.x, z: s.z, hx: 0.4, hz: 0.4, kind: 'prop' });
 
     // Traffic lights at every intersection corner (poles + heads).
-    const tlGeo = new THREE.CylinderGeometry(0.1, 0.1, 4.4, 6);
+    const tlGeo = new THREE.CylinderGeometry(0.09, 0.11, 4.4, 12);
     tlGeo.translate(0, 2.2, 0);
     const tlSpots: Array<{ x: number; z: number }> = [];
     for (let i = 0; i < STREETS; i++) {

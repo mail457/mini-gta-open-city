@@ -236,6 +236,11 @@ export class Game implements DebugApi {
     this.audio.play('missionStart');
     this.elapsed = 0;
     this.hud.toast('THE DELIVERY RUN — meet the courier', 'info', 4);
+    window.setTimeout(() => {
+      if (this.gameStatus === 'playing') {
+        this.hud.toast('Use W A S D to walk · mouse to look · follow the gold marker', 'info', 5);
+      }
+    }, 2500);
     this.mission.start(this.missionEnv());
   }
 
@@ -551,6 +556,20 @@ export class Game implements DebugApi {
   private lastMoney = 0;
   private previousMoney = 0;
   private npcTick = 0;
+  /** First-run coach: 'walk' → 'vehicle' → 'delivered' → 'done'. */
+  private tutorialStep: 'walk' | 'vehicle' | 'delivered' | 'done' = 'walk';
+  /**
+   * Guidance is computed from the *effective* phase: the mission may still be in
+   * 'meet' while the player is already sitting in a car, and the HUD must never
+   * tell a driver to walk to a marker.
+   */
+  private effectivePhase(mission: MissionState, driving: Vehicle | null): MissionState['phase'] {
+    const atStart = mission.waypoint
+      ? Math.hypot(this.player.position.x - mission.waypoint.x, this.player.position.z - mission.waypoint.z) < 6
+      : false;
+    if (mission.phase === 'meet' && (driving || atStart)) return 'getVehicle';
+    return mission.phase;
+  }
   private renderCount = 0;
   private lastDrawCalls = 0;
   private lastTriangles = 0;
@@ -621,8 +640,43 @@ export class Game implements DebugApi {
         waypoint: wp,
       },
       timeOfDayLabel: 'GOLDEN HOUR',
+      prompt: this.promptFor(v, mission),
+      hint: this.hintFor(mission, v),
     };
     this.hud.update(data);
+  }
+
+  /** What pressing E does right now, or a touch hint when nothing is close. */
+  private promptFor(driving: Vehicle | null, mission: MissionState): { key: string; text: string } | null {
+    if (driving) return { key: 'E', text: `Exit ${driving.spec.label}` };
+    const car = this.nearbyVehicle();
+    if (car) return { key: 'E', text: `Enter ${car.spec.label}${car.role === 'traffic' ? ' (jack it)' : ''}` };
+    const phase = this.effectivePhase(mission, driving);
+    if (this.gameStatus === 'playing' && phase === 'meet') {
+      return { key: 'W', text: 'Hold W to walk — follow the gold marker' };
+    }
+    if (this.gameStatus === 'playing' && phase === 'getVehicle') {
+      return { key: 'E', text: 'Get close to a car, then press E' };
+    }
+    return null;
+  }
+
+  /** One actionable sentence for the current objective. */
+  private hintFor(mission: MissionState, driving: Vehicle | null): string | null {
+    switch (this.effectivePhase(mission, driving)) {
+      case 'meet':
+        return 'Walk to the glowing gold marker. Use the compass at the top and the diamond on the minimap.';
+      case 'getVehicle':
+        return driving
+          ? 'You are in a car — the drop-off is now marked in gold. Start driving when you are ready.'
+          : 'Stand next to any car and press E to get in. One is parked just ahead of you; the gold marker shows other cars.';
+      case 'deliver':
+        return driving
+          ? 'Drive to the gold drop-off. Stop inside the ring before the timer ends. W = accelerate, S = brake, A/D = steer, Space = handbrake.'
+          : 'You are on foot — press E next to your car to get back in.';
+      default:
+        return null;
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -684,6 +738,21 @@ export class Game implements DebugApi {
     addHeadlightGlow(v);
   }
 
+  /** The vehicle the player would enter if they pressed E right now (or null). */
+  private nearbyVehicle(): Vehicle | null {
+    const p = this.player.position;
+    let best: Vehicle | null = null;
+    let bestD = Infinity;
+    for (const v of this.allVehicles()) {
+      const d = Math.hypot(v.position.x - p.x, v.position.z - p.z);
+      if (d < 4.2 && d < bestD) {
+        best = v;
+        bestD = d;
+      }
+    }
+    return best;
+  }
+
   private tryEnterVehicle(): void {
     if (!this.player.isGrounded) return;
     const p = this.player.position;
@@ -733,6 +802,10 @@ export class Game implements DebugApi {
     }
     best.driven = true;
     this.activeVehicle = best;
+    if (this.tutorialStep === 'walk' || this.tutorialStep === 'vehicle') {
+      this.tutorialStep = 'vehicle';
+      this.hud.toast('In the car — hold W to drive. Follow the gold marker to the drop-off.', 'good', 4.5);
+    }
     this.player.onFoot = false;
     this.player.object.visible = false;
     // Freeze the car briefly so you don't carry momentum from AI logic.

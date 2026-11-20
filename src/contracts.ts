@@ -336,6 +336,13 @@ export interface HudData {
     waypoint: XZ | null;
   };
   timeOfDayLabel: string;
+  /**
+   * Context action shown next to the player ("Press E to enter the sedan").
+   * Rendered as a prominent key prompt above the crosshair area.
+   */
+  prompt?: { key: string; text: string } | null;
+  /** One-line objective help, rendered directly under the mission panel. */
+  hint?: string | null;
 }
 
 export interface MissionResultView {

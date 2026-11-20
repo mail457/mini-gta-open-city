@@ -25,7 +25,7 @@ export function createSky(scene: THREE.Scene): SkyRig {
   // Sun direction matches the sky shader's sun disk and the environment map.
   sun.position.copy(SUN_DIR).multiplyScalar(150);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(4096, 4096);
   sun.shadow.camera.near = 10;
   sun.shadow.camera.far = 420;
   const s = 95;
@@ -34,8 +34,9 @@ export function createSky(scene: THREE.Scene): SkyRig {
   cam.right = s;
   cam.top = s;
   cam.bottom = -s;
-  sun.shadow.bias = -0.0006;
-  sun.shadow.normalBias = 0.03;
+  sun.shadow.bias = -0.0004;
+  sun.shadow.normalBias = 0.02;
+  sun.shadow.radius = 2;
   sun.target.position.set(0, 0, 0);
   scene.add(sun.target);
   group.add(sun);

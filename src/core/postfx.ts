@@ -19,7 +19,7 @@ export type Quality = 'high' | 'low';
 
 export const SKY_TOP = 0x2a63a8;
 export const SKY_MID = 0x7fb2e0;
-export const SKY_HORIZON = 0xf7c98b;
+export const SKY_HORIZON = 0xffc98a;
 export const SUN_DIR = new THREE.Vector3(0.55, 0.62, 0.42).normalize();
 
 /**
@@ -119,10 +119,10 @@ export function createSkyEnvironment(renderer: THREE.WebGLRenderer): THREE.Textu
 const GradeShader = {
   uniforms: {
     tDiffuse: { value: null as THREE.Texture | null },
-    saturation: { value: 1.12 },
-    warmth: { value: 0.035 },
-    contrast: { value: 1.06 },
-    vignette: { value: 0.28 },
+    saturation: { value: 1.26 },
+    warmth: { value: 0.05 },
+    contrast: { value: 1.1 },
+    vignette: { value: 0.3 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
