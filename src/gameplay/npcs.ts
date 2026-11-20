@@ -113,6 +113,9 @@ interface Ped {
   z: number;
   /** Seconds of standing still after bumping into a wall. */
   bumpHold: number;
+  /** Health (downed at 0), plus the downed timer before the pedestrian respawns. */
+  health: number;
+  downed: number;
 }
 
 interface CarWheels {
@@ -200,6 +203,8 @@ export class NpcSystem implements NPCSystemApi {
 
     this.carMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.12 });
 
+    // Traffic stays on asphalt even though the player may drive onto pavements.
+    try { (world as unknown as { kerbBlocking: boolean }).kerbBlocking = true; } catch { /* read-only fake */ }
     this.buildPaths();
     this.spawnPedestrians(NPC_CONFIG.pedestrians);
     this.spawnTraffic(NPC_CONFIG.trafficCars);
@@ -409,6 +414,8 @@ export class NpcSystem implements NPCSystemApi {
           x: path.minX,
           z: path.minZ,
           bumpHold: 0,
+          health: 100,
+          downed: 0,
         };
         this.placePed(ped);
         root.position.set(ped.x, 0, ped.z);
@@ -652,6 +659,20 @@ export class NpcSystem implements NPCSystemApi {
     /* -------------------------------- peds -------------------------------- */
     for (let i = 0; i < this.peds.length; i++) {
       const ped = this.peds[i];
+      if (ped.downed > 0) {
+        // Knocked down: lie still, then get up at the start of the loop.
+        ped.downed -= dt;
+        ped.root.rotation.x = -1.45;
+        ped.root.position.y = 0.18;
+        if (ped.downed <= 0) {
+          ped.health = 100;
+          ped.root.rotation.x = 0;
+          ped.dist = 0;
+          this.placePed(ped);
+          ped.root.position.set(ped.x, 0, ped.z);
+        }
+        continue;
+      }
       let target = ped.baseSpeed;
       // 1) Same-loop spacing: nearest ped behind us -> ease off (accelerate if clear).
       let nearestBehind = Infinity;
@@ -951,6 +972,35 @@ export class NpcSystem implements NPCSystemApi {
   }
 
   /** Downsampled positions for the minimap (<= 48 cars, <= 48 peds; buffers reused). */
+  /** Living pedestrians: id + chest position (for hitscan targeting). */
+  targetablePedestrians(): Array<{ id: number; position: THREE.Vector3 }> {
+    const out: Array<{ id: number; position: THREE.Vector3 }> = [];
+    for (let i = 0; i < this.peds.length; i++) {
+      const p = this.peds[i];
+      if (p.downed > 0 || !p.root.visible) continue;
+      out.push({ id: i, position: new THREE.Vector3(p.x, 1.15, p.z) });
+    }
+    return out;
+  }
+
+  /** Bullet damage: pedestrians flee briefly and are knocked down at 0 health. */
+  damagePedestrian(id: number, amount: number, from: XZ): void {
+    const p = this.peds[id];
+    if (!p || p.downed > 0) return;
+    p.health -= amount;
+    // Push them a little away from the shooter; they stagger.
+    const dx = p.x - from.x;
+    const dz = p.z - from.z;
+    const l = Math.hypot(dx, dz) || 1;
+    p.x += (dx / l) * 0.25;
+    p.z += (dz / l) * 0.25;
+    p.root.position.set(p.x, 0, p.z);
+    if (p.health <= 0) {
+      p.downed = 6;
+      p.root.rotation.z = (this.rng() - 0.5) * 0.3;
+    }
+  }
+
   minimapData(): { cars: XZ[]; peds: XZ[] } {
     const cars = this.minimapCars;
     cars.length = 0;

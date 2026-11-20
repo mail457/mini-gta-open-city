@@ -17,9 +17,9 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
 export type Quality = 'high' | 'low';
 
-export const SKY_TOP = 0x2a63a8;
+export const SKY_TOP = 0x2f6fc4;
 export const SKY_MID = 0x7fb2e0;
-export const SKY_HORIZON = 0xffc98a;
+export const SKY_HORIZON = 0xffd2a1;
 export const SUN_DIR = new THREE.Vector3(0.55, 0.62, 0.42).normalize();
 
 /**
@@ -119,10 +119,10 @@ export function createSkyEnvironment(renderer: THREE.WebGLRenderer): THREE.Textu
 const GradeShader = {
   uniforms: {
     tDiffuse: { value: null as THREE.Texture | null },
-    saturation: { value: 1.26 },
-    warmth: { value: 0.05 },
-    contrast: { value: 1.1 },
-    vignette: { value: 0.3 },
+    saturation: { value: 1.32 },
+    warmth: { value: 0.04 },
+    contrast: { value: 1.14 },
+    vignette: { value: 0.26 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -170,7 +170,7 @@ export function createPostFX(renderer: THREE.WebGLRenderer, scene: THREE.Scene, 
   composer.addPass(new RenderPass(scene, camera));
   // strength 0.3 on a 0.5 radius reads as a glow on bright windows/lamps without
   // smearing the whole image.
-  const bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), quality === 'high' ? 0.32 : 0.0, 0.5, 0.82);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), quality === 'high' ? 0.26 : 0.0, 0.45, 0.86);
   composer.addPass(bloom);
   const grade = new ShaderPass(GradeShader);
   composer.addPass(grade);
@@ -191,7 +191,7 @@ export function createPostFX(renderer: THREE.WebGLRenderer, scene: THREE.Scene, 
       void c;
     },
     setQuality(q) {
-      bloom.strength = q === 'high' ? 0.32 : 0.0;
+      bloom.strength = q === 'high' ? 0.26 : 0.0;
       // MSAA cannot change without rebuilding the target; softening bloom is enough.
     },
     dispose() {

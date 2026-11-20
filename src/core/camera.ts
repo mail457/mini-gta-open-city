@@ -74,25 +74,27 @@ export class ThirdPersonCamera {
    * @param autoYaw when driving and no mouse input recently, trail the car heading
    */
   update(anchor: THREE.Vector3, dt: number, speedRatio: number, autoYaw: number | null, obstacles: XZ[] = []): void {
-    // Safe orbit radius so the polar boom never dips under the street when
-    // the player looks up (pitch → 0): R*sin(pitch) must stay above ~1.2 m.
-    const safeR = Math.min(this.distance + speedRatio * 1.8, 1.35 / Math.sin(Math.max(this.pitch, 0.02)));
-    this.distance = damp(this.distance, Math.min(this.distance, Math.max(safeR, 2.4)), 8, dt);
+    // Auto-trail: keep the camera behind the subject while driving / when idle,
+    // turning at a limited, smooth rate so it never snaps around.
     if (autoYaw !== null) {
-      // Blend camera behind vehicle only when the player isn't steering the camera.
       let d = autoYaw - this.yaw;
       d = Math.atan2(Math.sin(d), Math.cos(d));
-      this.yaw += d * (1 - Math.exp(-2.2 * dt));
+      const maxTurn = (this.mode === 'car' ? 2.6 : 1.6) * dt; // rad/s
+      const want = d * (1 - Math.exp(-3.2 * dt));
+      this.yaw += clamp(want, -maxTurn, maxTurn);
     }
-    this.distance = damp(this.distance, this.targetDistance + speedRatio * 1.8, 4, dt);
+    // Smooth the boom length/height.
+    this.distance = damp(this.distance, Math.min(this.targetDistance + speedRatio * 1.8, 1.35 / Math.sin(Math.max(this.pitch, 0.02))), 4, dt);
     this.height = damp(this.height, this.targetHeight, 4, dt);
     this.lookHeight = damp(this.lookHeight, this.targetLookHeight, 5, dt);
-    this.followPos.x = damp(this.followPos.x, anchor.x, 14, dt);
+    // Position smoothing: snappier while driving so the car stays centred.
+    const posL = this.mode === 'car' ? 26 : 16;
+    this.followPos.x = damp(this.followPos.x, anchor.x, posL, dt);
     this.followPos.y = damp(this.followPos.y, anchor.y, 9, dt);
-    this.followPos.z = damp(this.followPos.z, anchor.z, 14, dt);
+    this.followPos.z = damp(this.followPos.z, anchor.z, posL, dt);
     this.computeDesired(this.followPos);
 
-    // Simple camera push-in if the boom is inside a building footprint.
+    // Wall avoidance: pull the camera in if the boom would clip a building.
     let blocked = 0;
     for (let i = 0; i < obstacles.length; i++) {
       const o = obstacles[i];

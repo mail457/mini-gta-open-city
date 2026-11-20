@@ -25,7 +25,7 @@ export class Input {
     lookY: 0,
   };
   active = false;
-  /** Seconds since the last frame with any input (drives camera auto-follow). */
+  /** Seconds since the player last moved the mouse (drives camera auto-follow). */
   afk = 0;
   pointerLocked = false;
   /** Notified when the player releases pointer lock (used to auto-pause). */
@@ -46,8 +46,15 @@ export class Input {
     });
   }
 
+  /** Pure key mapping (exported for tests): returns [moveX, moveY] per the contract. */
+  static axesFromKeys(has: (code: string) => boolean): [number, number] {
+    const moveX = (has('KeyD') || has('ArrowRight') ? 1 : 0) - (has('KeyA') || has('ArrowLeft') ? 1 : 0);
+    const moveY = (has('KeyW') || has('ArrowUp') ? 1 : 0) - (has('KeyS') || has('ArrowDown') ? 1 : 0);
+    return [moveX, moveY];
+  }
+
   private onKeyDown = (e: KeyboardEvent) => {
-    if (this.active && ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) {
+    if (this.active && ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Backspace'].includes(e.code)) {
       e.preventDefault();
     }
     if (!this.keys.has(e.code)) {
@@ -128,8 +135,12 @@ export class Input {
       return now < this.edgeUntil && codes.some((c) => this.edgeKeys.includes(c));
     };
     const k = this.keys;
-    f.moveX = (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0);
-    f.moveY = (k.has('KeyW') || k.has('ArrowUp') ? 1 : 0) - (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0);
+    // Frozen convention (src/contracts.ts): +1 = RIGHT (D/→), −1 = LEFT (A/←).
+    // Walk code treats +moveX as "strafe towards the camera's right"; steering
+    // treats +moveX as "turn right". Both consumers agree with this mapping.
+    const [moveX, moveY] = Input.axesFromKeys((c) => k.has(c));
+    f.moveX = moveX;
+    f.moveY = moveY;
     f.sprint = k.has('ShiftLeft') || k.has('ShiftRight');
     f.jump = k.has('Space');
     f.interact = edgeFor(['KeyE', 'KeyF']);
@@ -139,7 +150,7 @@ export class Input {
     f.lookY = this.mouseDY * this.mouseSensitivity;
     this.mouseDX = 0;
     this.mouseDY = 0;
-    this.afk = 0;
+    if (Math.abs(f.lookX) + Math.abs(f.lookY) > 1e-4) this.afk = 0;
     this.pressed.clear();
     return f;
   }

@@ -60,7 +60,7 @@ export const PLAYER_TUNING = {
 } as const;
 
 /** Pelvis height (m) above the feet. */
-const HIP_Y = 0.985; // hip height: thigh 0.46 + shin 0.4 + shoe/sole 0.125
+const HIP_Y = 0.965; // hips: tuned by sweep so the rounded soles rest exactly on y=0
 /** Stride frequency at walk / sprint speed (cycles per second). */
 const WALK_CYCLE = 1.55;
 const RUN_CYCLE = 1.9;
@@ -117,7 +117,10 @@ function buildAvatar(materials: THREE.Material[]) {
   const eye = mat(PALETTE.eye, { roughness: 0.35, metalness: 0.1 });
   const bag = mat(PALETTE.bag, { roughness: 0.85 });
 
-  const box = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
+  /**
+   * Smooth primitive helpers. Everything the player sees is rounded: capsules for
+   * limbs, spheres for joints, a lathe for the torso shell. No boxes.
+   */
   const mesh = (geo: THREE.BufferGeometry, material: THREE.Material, x = 0, y = 0, z = 0): THREE.Mesh => {
     const m = new THREE.Mesh(geo, material);
     m.position.set(x, y, z);
@@ -125,6 +128,17 @@ function buildAvatar(materials: THREE.Material[]) {
     m.receiveShadow = true;
     return m;
   };
+  const SEG = 20; // radial segments: smooth silhouettes at close range
+  /** Capsule between two points on the local Y axis: length = distance. */
+  const capsule = (radius: number, length: number, seg: number = SEG) => new THREE.CapsuleGeometry(radius, Math.max(0.01, length), 6, seg);
+  const sphere = (r: number, sx = 1, sy = 1, sz = 1, seg: number = SEG) => {
+    const g = new THREE.SphereGeometry(r, seg, Math.max(8, seg / 2));
+    g.scale(sx, sy, sz);
+    return g;
+  };
+  /** Tapered lathe body: a smooth torso / pelvis shell. */
+  const lathe = (profile: Array<[number, number]>, seg: number = SEG) =>
+    new THREE.LatheGeometry(profile.map(([r, y]) => new THREE.Vector2(r, y)), seg);
 
   const root = new THREE.Group();
   root.name = 'player';
@@ -132,52 +146,84 @@ function buildAvatar(materials: THREE.Material[]) {
   rig.name = 'playerRig';
   root.add(rig);
 
-  // Hip pivot sits at the leg tops; legs hang down from it.
   const hips = new THREE.Group();
   hips.position.y = HIP_Y;
   rig.add(hips);
 
   /* ------------------------------- legs ------------------------------- */
+  // Hip 0.985 → knee at −0.44 → ankle at −0.84; soles at −0.985 (y=0 in world).
   const makeLeg = (side: -1 | 1): { limb: Limb; knee: THREE.Group } => {
     const pivot = new THREE.Group();
-    pivot.position.set(0.13 * side, 0, 0);
+    pivot.position.set(0.115 * side, 0, 0);
     hips.add(pivot);
-    pivot.add(mesh(box(0.19, 0.46, 0.22), jeans, 0, -0.23, 0)); // thigh
+    // Thigh: capsule with a smooth hip ball joint.
+    pivot.add(mesh(sphere(0.105, 1, 1.15, 1), jeans, 0, -0.02, 0));
+    pivot.add(mesh(capsule(0.078, 0.30), jeans, 0, -0.22, 0));
     const knee = new THREE.Group();
     knee.position.y = -0.44;
     pivot.add(knee);
-    knee.add(mesh(box(0.17, 0.4, 0.19), jeans, 0, -0.2, 0)); // shin
-    knee.add(mesh(box(0.18, 0.05, 0.2), jeansCuff, 0, -0.4, 0)); // cuff
-    knee.add(mesh(box(0.19, 0.1, 0.3), sneaker, 0, -0.47, -0.06)); // shoe, toe to −Z
-    knee.add(mesh(box(0.2, 0.04, 0.31), sole, 0, -0.535, -0.06)); // sole
+    knee.add(mesh(sphere(0.072), jeans, 0, 0, 0));
+    knee.add(mesh(capsule(0.066, 0.30), jeans, 0, -0.2, 0));
+    // Ankle + shoe: rounded uppers with a thin sole, toe toward −Z.
+    knee.add(mesh(sphere(0.062), sneaker, 0, -0.4, 0));
+    const shoe = mesh(sphere(0.062, 1.05, 0.85, 1.9), sneaker, 0, -0.455, -0.075);
+    knee.add(shoe);
+    const soleMesh = mesh(sphere(0.06, 1.08, 0.42, 2.0), sole, 0, -0.5, -0.075);
+    soleMesh.castShadow = false;
+    knee.add(soleMesh);
     return { limb: { pivot }, knee };
   };
   const L = makeLeg(-1);
   const R = makeLeg(1);
 
   /* ------------------------------- torso ------------------------------ */
+  // A smooth shell: waist → chest → shoulders, slightly deeper front-to-back.
   const torso = new THREE.Group();
   hips.add(torso);
-  torso.add(mesh(box(0.46, 0.5, 0.28), jacket, 0, 0.27, 0)); // chest
-  torso.add(mesh(box(0.48, 0.12, 0.3), jacketTrim, 0, 0.02, 0)); // hem
-  torso.add(mesh(box(0.1, 0.44, 0.02), shirt, 0, 0.27, -0.145)); // open jacket → shirt
-  torso.add(mesh(box(0.3, 0.06, 0.24), jacketTrim, 0, 0.53, 0)); // collar
-  torso.add(mesh(box(0.26, 0.2, 0.1), bag, 0.22, 0.06, 0.06)); // messenger bag
-  const strap = mesh(box(0.05, 0.5, 0.02), bag, 0.02, 0.33, -0.15);
-  strap.rotation.z = -0.55;
+  const shell = new THREE.Mesh(
+    lathe([
+      [0.15, -0.02],
+      [0.165, 0.04],
+      [0.17, 0.12],
+      [0.185, 0.24],
+      [0.19, 0.34],
+      [0.175, 0.45],
+      [0.13, 0.52],
+      [0.06, 0.545],
+    ]),
+    jacket,
+  );
+  shell.scale.z = 0.78; // flatter chest, wider shoulders
+  shell.castShadow = true;
+  shell.receiveShadow = true;
+  torso.add(shell);
+  // Open jacket front showing a shirt strip.
+  const shirtStrip = mesh(new THREE.CapsuleGeometry(0.045, 0.3, 4, 12), shirt, 0, 0.27, -0.125);
+  shirtStrip.castShadow = false;
+  torso.add(shirtStrip);
+  // Collar ring.
+  const collar = mesh(new THREE.TorusGeometry(0.085, 0.035, 8, 18), jacketTrim, 0, 0.5, 0);
+  collar.rotation.x = Math.PI / 2;
+  torso.add(collar);
+  // Messenger bag + strap (smooth).
+  torso.add(mesh(sphere(0.11, 1.1, 0.9, 0.55), bag, 0.2, 0.06, 0.07));
+  const strap = mesh(new THREE.TorusGeometry(0.19, 0.018, 6, 24, Math.PI * 0.9), bag, 0.0, 0.3, -0.02);
+  strap.rotation.set(0, 0, -0.5);
   torso.add(strap);
 
   /* ------------------------------- arms ------------------------------- */
   const makeArm = (side: -1 | 1): { limb: Limb; elbow: THREE.Group } => {
     const pivot = new THREE.Group();
-    pivot.position.set(0.29 * side, 0.48, 0); // shoulder
+    pivot.position.set(0.215 * side, 0.44, 0); // shoulder
     torso.add(pivot);
-    pivot.add(mesh(box(0.13, 0.34, 0.15), jacket, 0, -0.16, 0)); // upper arm
+    pivot.add(mesh(sphere(0.068), jacket, 0, 0, 0)); // shoulder cap
+    pivot.add(mesh(capsule(0.056, 0.2), jacket, 0, -0.15, 0)); // upper arm
     const elbow = new THREE.Group();
-    elbow.position.y = -0.33;
+    elbow.position.y = -0.3;
     pivot.add(elbow);
-    elbow.add(mesh(box(0.115, 0.3, 0.13), jacket, 0, -0.15, 0)); // forearm
-    elbow.add(mesh(box(0.11, 0.11, 0.12), skin, 0, -0.34, 0)); // hand
+    elbow.add(mesh(sphere(0.05), shirt, 0, 0, 0));
+    elbow.add(mesh(capsule(0.046, 0.18), shirt, 0, -0.12, 0)); // rolled sleeve forearm
+    elbow.add(mesh(sphere(0.048, 1, 1.15, 0.85), skin, 0, -0.27, 0)); // hand
     return { limb: { pivot }, elbow };
   };
   const AL = makeArm(-1);
@@ -185,21 +231,34 @@ function buildAvatar(materials: THREE.Material[]) {
 
   /* ------------------------------- head ------------------------------- */
   const head = new THREE.Group();
-  // Neck base sits on the collar (torso-local 0.53). Skull top ≈ 1.63 m,
-  // cap top ≈ 1.75 m — total avatar height (feet → cap) = 1.75 m.
-  // (Torso-local 0.48 keeps the cap clear of the shoulder-line rotation.)
-  head.position.y = 0.48;
+  head.position.y = 0.5;
   torso.add(head);
-  head.add(mesh(box(0.12, 0.1, 0.12), skin, 0, 0.02, 0)); // neck
-  head.add(mesh(box(0.24, 0.26, 0.23), skin, 0, 0.19, 0)); // skull
-  const eyeGeo = new THREE.BoxGeometry(0.035, 0.035, 0.02);
-  head.add(mesh(eyeGeo, eye, -0.055, 0.21, -0.12));
-  head.add(mesh(eyeGeo, eye, 0.055, 0.21, -0.12));
-  head.add(mesh(box(0.04, 0.05, 0.04), skin, 0, 0.16, -0.13)); // nose
-  head.add(mesh(box(0.06, 0.05, 0.06), hair, 0, 0.24, 0.1)); // hair tuft
-  head.add(mesh(new THREE.CylinderGeometry(0.135, 0.1, 0.11, 10), cap, 0, 0.355, 0)); // crown
-  head.add(mesh(box(0.22, 0.025, 0.15), cap, 0, 0.305, -0.16)); // brim
-  head.add(mesh(new THREE.SphereGeometry(0.02, 6, 4), cap, 0, 0.412, 0)); // button
+  head.add(mesh(new THREE.CylinderGeometry(0.05, 0.058, 0.1, 16), skin, 0, 0.0, 0)); // neck
+  // Skull: slightly ovoid, with a jaw taper.
+  const skull = mesh(sphere(0.105, 1, 1.12, 1.02, 28), skin, 0, 0.14, 0);
+  head.add(skull);
+  const jaw = mesh(sphere(0.07, 1.05, 0.9, 0.95, 20), skin, 0, 0.08, -0.035);
+  head.add(jaw);
+  // Eyes + brows.
+  const eyeGeo = sphere(0.014, 1, 1, 0.5, 10);
+  for (const sx of [-0.038, 0.038]) {
+    head.add(mesh(eyeGeo, eye, sx, 0.152, -0.098));
+    const brow = mesh(new THREE.CapsuleGeometry(0.006, 0.03, 3, 6), hair, sx, 0.172, -0.1);
+    brow.rotation.z = Math.PI / 2;
+    head.add(brow);
+  }
+  head.add(mesh(sphere(0.018, 1, 1.2, 1.1, 10), skin, 0, 0.13, -0.108)); // nose
+  // Hair: a smooth cap over the back of the skull, plus a back-of-head volume.
+  const hairCap = mesh(sphere(0.108, 1.02, 0.75, 1.0, 24), hair, 0, 0.165, 0.012);
+  hairCap.scale.set(1, 1, 1);
+  head.add(hairCap);
+  // Cap peaked baseball cap (if the palette keeps the cap look) — smooth crown.
+  const crown = mesh(sphere(0.107, 1.02, 0.62, 1.03, 24), cap, 0, 0.19, 0);
+  head.add(crown);
+  const brim = mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.012, 24, 1, false, Math.PI, Math.PI), cap, 0, 0.16, -0.075);
+  brim.scale.set(1.05, 1, 1.25);
+  brim.rotation.x = -0.08;
+  head.add(brim);
 
   return {
     root,

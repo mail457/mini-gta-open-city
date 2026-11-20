@@ -56,6 +56,58 @@ const BOUNDS = { minX: WORLD_MIN, maxX: WORLD_MAX, minZ: WORLD_MIN, maxZ: WORLD_
 /** Depth of the walkable plaza on every side of a block. */
 export const PLAZA_D = 6;
 
+/**
+ * CITY_DRESSING — one knob for how busy the streets are (QA: tune here).
+ *
+ *  lampEvery    1 = every sidewalk lamp spot, 2 = every other one (default), ...
+ *  benchEvery   0 disables benches (0 = off; default: no benches).
+ *  hydrantEvery 0 disables hydrants (0 = off; default: no hydrants).
+ *  treeEvery    1.5 = one tree per 1.5 lamp spots (park trees unaffected).
+ *  rushHour     1 = full pedestrian/traffic spawn budget of the NPC system's
+ *               density tuning; this module only exposes the number.
+ *
+ * Colliders are pushed only for props that are actually built, so gameplay
+ * (walkable pavements, car navigation) always matches what players see.
+ */
+export const CITY_DRESSING = {
+  /** Every N-th sidewalk lamp spot gets a streetlight (2 = every other). */
+  lampEvery: 2,
+  /** Every N-th sidewalk lamp spot gets a bench (0 = off). */
+  benchEvery: 0,
+  /** Every N-th sidewalk lamp spot gets a hydrant (0 = off). */
+  hydrantEvery: 0,
+  /** Every N-th sidewalk lamp spot gets a tree (0 = off). */
+  treeEvery: 3,
+  /** Every N-th sidewalk lamp spot gets a traffic light. */
+  trafficLightEvery: 1,
+  /** Fraction of building rooftops that carry plant (AC unit / tank / mast). */
+  roofPlantShare: 0.5,
+  /** Total buildings the layout allocates (informational; layout is seeded). */
+  buildingCount: 21,
+} as const;
+
+/**
+ * Lighting for the building facades (QA).
+ *
+ * The sky rig (src/game/sky.ts) puts a 2.6-intensity sun at a fixed angle, so
+ * two of the four street canyon walls are always in shadow and, with the
+ * hemisphere + room environment alone, a shaded facade rendered at roughly the
+ * same luminance as the sky behind it: the walls wash out into the haze and only
+ * the dark windows are legible. `fill` is a warm, near-vertical fill light that
+ * lifts every facade without touching the ground much; `envIntensity` raises how
+ * much sky the stone/concrete picks up. Both live in the city scene, not the sky.
+ */
+export const FACADE_LIGHTING = {
+  /** Colour of the warm facade fill. */
+  fillColor: 0xfff1dc,
+  /** DirectionalLight intensity of the facade fill (0 disables it). */
+  fillIntensity: 1.15,
+  /** Direction it shines FROM (normalised); near-vertical keeps streets readable. */
+  fillDir: { x: 0.32, y: 0.86, z: -0.4 },
+  /** envMapIntensity used by the stone/concrete facade material. */
+  envIntensity: 1.6,
+} as const;
+
 const PALETTE = {
   asphalt: 0x2e323a,
   sidewalk: 0xa7a49c,
@@ -173,9 +225,11 @@ export class City implements CityWorld {
   readonly roadGraph: RoadGraph;
   readonly pois: Record<string, XZ>;
   readonly colliders: Rect[] = [];
+  /** Free-roam default: cars may leave the road. Traffic (AI) sets this to true. */
+  kerbBlocking = false;
   private grid: CollisionGrid;
   private buildingCount = 0;
-  private disposables: Array<THREE.BufferGeometry | THREE.Material | THREE.Texture> = [];
+  private disposables: Array<{ dispose(): void }> = [];
   private tmpIdx: number[] = [];
   private trafficLights: THREE.InstancedMesh | null = null;
   private tris = 0;
@@ -195,6 +249,7 @@ export class City implements CityWorld {
     this.buildBoundary();
     this.buildBackdrop();
     this.buildGround();
+    this.buildFacadeFill();
 
     // Colliders: buildings + props pushed by their builders.
     this.grid = new CollisionGrid(this.colliders);
@@ -224,9 +279,24 @@ export class City implements CityWorld {
     this.disposables.push(merged, material);
   }
 
+  /**
+   * Warm fill that keeps every street-level facade brighter than the sky behind
+   * it (see FACADE_LIGHTING). Added to the city group, so it lights the scenery
+   * and not the player/vehicles (those live in the game scene next to the city).
+   */
+  private buildFacadeFill(): void {
+    if (FACADE_LIGHTING.fillIntensity <= 0) return;
+    const fill = new THREE.DirectionalLight(FACADE_LIGHTING.fillColor, FACADE_LIGHTING.fillIntensity);
+    const d = FACADE_LIGHTING.fillDir;
+    fill.position.set(d.x, d.y, d.z).normalize().multiplyScalar(200);
+    fill.target.position.set(0, 0, 0);
+    // Lights live in the scene graph, not in `disposables` (materials/geometries only).
+    this.group.add(fill, fill.target);
+  }
+
   private buildGround(): void {
-    const m = new THREE.MeshStandardMaterial({ color: 0x5d6b4e, roughness: 1 });
-    const g = plane(1200, 1200, 0, -0.08, 0, 0x5d6b4e);
+    const m = new THREE.MeshStandardMaterial({ color: 0x6b7358, roughness: 0.9 });
+    const g = plane(1200, 1200, 0, -0.08, 0, 0x6b7358);
     this.add(g, m, false);
   }
 
@@ -248,7 +318,9 @@ export class City implements CityWorld {
         strips.push(plane(half * 2, half * 2, nsX(s), 0.012, ewZ(j), PALETTE.asphalt));
       }
     }
-    this.add(strips, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.72, metalness: 0.08 }), false);
+    // Glossy asphalt: low roughness + light metalness gives the sun a long specular
+    // streak down the street (the GTA V road look) instead of a flat matte strip.
+    this.add(strips, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.42, metalness: 0.18, envMapIntensity: 0.75 }), false);
 
     // Lane dashes + centre lines + crosswalks (all instanced-ish via merged boxes).
     const dashGeos: THREE.BufferGeometry[] = [];
@@ -294,7 +366,7 @@ export class City implements CityWorld {
       }
     }
     void rng;
-    this.add([...dashGeos, ...marks], new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 }), false);
+    this.add([...dashGeos, ...marks], new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.1 }), false);
   }
 
   private buildSidewalksAndBlocks(): void {
@@ -344,8 +416,8 @@ export class City implements CityWorld {
         }
       }
     }
-    this.add(kerbs, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92 }), false);
-    this.add(inners, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }), false);
+    this.add(kerbs, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, metalness: 0.05, envMapIntensity: 0.6 }), false);
+    this.add(inners, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, envMapIntensity: 0.5 }), false);
     // Park details.
     const park = blockRect(2, 2);
     const paths: THREE.BufferGeometry[] = [];
@@ -364,38 +436,33 @@ export class City implements CityWorld {
     const glassGeos: THREE.BufferGeometry[] = [];
     const trimGeos: THREE.BufferGeometry[] = [];
     const roofGeos: THREE.BufferGeometry[] = [];
+    const FACADE_INDEX = new Map(FACADES.map((c, i) => [c, i % BUILDING_STYLES.length]));
     const rngStyle = makeRng(1234);
     for (const b of defs) {
-      // Smooth, bevelled facade with recessed window bays and cornices.
+      // Clean, evenly windowed stone/glass facade (one wall surface per building).
       const geo = buildBuildingGeometry({
         x: b.x,
         z: b.z,
         hx: b.hx,
         hz: b.hz,
         h: b.h,
-        style: Math.floor(rngStyle() * BUILDING_STYLES.length),
+        style: FACADE_INDEX.get(b.color) ?? Math.floor(rngStyle() * BUILDING_STYLES.length),
       });
-      geo.wall.translate(0, 0, 0);
       walls.push(geo.wall);
       glassGeos.push(geo.glass);
       trimGeos.push(geo.trim);
-      // Rooftop plant, kept low-poly but smooth-shaded.
+      // Rooftop plant: only on a share of the roofs, low-poly and out of sight
+      // from the street (keeps cornices/parapets as the roof silhouette).
       const h = b.h;
-      const unit = new THREE.CylinderGeometry(1.1, 1.1, 1.0, 16);
-      unit.translate(b.x + b.hx * 0.35, h + 1.0, b.z - b.hz * 0.25);
-      roofGeos.push(colorizeCyl(unit, 0x9aa3aa));
-      if (h > 22) {
-        const tank = new THREE.CylinderGeometry(1.1, 1.1, 2.4, 16);
-        tank.translate(b.x - b.hx * 0.3, h + 1.7, b.z + b.hz * 0.3);
-        roofGeos.push(colorizeCyl(tank, 0x8d7a63));
-        const roof = new THREE.ConeGeometry(1.25, 0.5, 16);
-        roof.translate(b.x - b.hx * 0.3, h + 3.15, b.z + b.hz * 0.3);
-        roofGeos.push(colorizeCyl(roof, 0x6f5d4c));
+      if (rngStyle() < CITY_DRESSING.roofPlantShare) {
+        const unit = new THREE.CylinderGeometry(1.1, 1.1, 1.0, 12);
+        unit.translate(b.x + b.hx * 0.35, h + 1.2, b.z - b.hz * 0.25);
+        roofGeos.push(colorizeCyl(unit, 0x9aa3aa));
       }
-      if (b.roof === 'antenna') {
-        const mast = new THREE.CylinderGeometry(0.06, 0.1, 9, 8);
-        mast.translate(b.x, h + 5, b.z);
-        roofGeos.push(colorizeCyl(mast, 0xb9c0c6));
+      if (h > 22 && rngStyle() < CITY_DRESSING.roofPlantShare) {
+        const tank = new THREE.CylinderGeometry(1.1, 1.1, 2.4, 12);
+        tank.translate(b.x - b.hx * 0.3, h + 1.9, b.z + b.hz * 0.3);
+        roofGeos.push(colorizeCyl(tank, 0x8d7a63));
       }
       // Collision footprint (the bevelled wall sits slightly inside the box).
       this.colliders.push({ x: b.x, z: b.z, hx: b.hx - 0.15, hz: b.hz - 0.15, height: h, kind: 'building' });
@@ -407,26 +474,30 @@ export class City implements CityWorld {
         }
       }
     }
-    // Facades: smooth normals + soft stone sheen so sun wraps and glass reflects sky.
+    // Facades: matte stone/concrete that picks up sky light (see FACADE_LIGHTING)
+    // so walls stay brighter than the sky behind them.
     this.add(walls, new THREE.MeshStandardMaterial({
       vertexColors: true,
-      roughness: 0.68,
-      metalness: 0.04,
-      envMapIntensity: 0.9,
+      roughness: 0.72,
+      metalness: 0.0,
+      envMapIntensity: FACADE_LIGHTING.envIntensity,
     }), true);
+    // Glass: dark, glossy, reflects the sky so the grid reads as windows.
     this.add(glassGeos, new THREE.MeshStandardMaterial({
       vertexColors: true,
-      roughness: 0.08,
-      metalness: 0.65,
-      envMapIntensity: 1.4,
+      roughness: 0.16,
+      metalness: 0.5,
+      envMapIntensity: 1.2,
     }), false);
     this.add(trimGeos, new THREE.MeshStandardMaterial({
       vertexColors: true,
-      roughness: 0.55,
-      metalness: 0.05,
-      envMapIntensity: 0.8,
+      roughness: 0.68,
+      metalness: 0.02,
+      envMapIntensity: FACADE_LIGHTING.envIntensity,
     }), false);
-    this.add(roofGeos, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.25 }), false);
+    if (roofGeos.length) {
+      this.add(roofGeos, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.1 }), false);
+    }
   }
 
   /** Place instanced meshes for repeated props. */
@@ -460,6 +531,11 @@ export class City implements CityWorld {
     return mesh;
   }
 
+  /** Spots at `offset, offset + every, ...`; `every <= 0` disables the prop. */
+  private pickSpots<T>(spots: T[], every: number, offset: number): T[] {
+    return every > 0 ? spots.filter((_, i) => i >= offset && (i - offset) % every === 0) : [];
+  }
+
   private sidewalkSpots(): Array<{ x: number; z: number }> {
     const spots: Array<{ x: number; z: number }> = [];
     const off = SIDEWALK_WIDTH * 0.45;
@@ -484,12 +560,14 @@ export class City implements CityWorld {
     const spots = this.sidewalkSpots();
     const lampMats = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6 });
 
-    // Streetlights: pole + head
+    // Every prop below walks the same spot list with its own stride, so a spot
+    // carries at most one prop and the pavement reads calm (CITY_DRESSING).
+    // Streetlights: pole + head.
     const poleGeo = new THREE.CylinderGeometry(0.08, 0.13, 5.2, 12);
     poleGeo.translate(0, 2.6, 0);
     const headGeo = new THREE.BoxGeometry(0.5, 0.22, 1.1);
     headGeo.translate(0, 5.2, 0.35);
-    const lampSpots = spots.filter((_, i) => i % 2 === 0);
+    const lampSpots = this.pickSpots(spots, CITY_DRESSING.lampEvery, 0);
     this.instanced(poleGeo, new THREE.MeshStandardMaterial({ color: 0x3c4148, roughness: 0.6 }), lampSpots);
     this.instanced(
       headGeo,
@@ -499,23 +577,27 @@ export class City implements CityWorld {
     for (const s of lampSpots) this.colliders.push({ x: s.x, z: s.z, hx: 0.18, hz: 0.18, kind: 'prop' });
     void lampMats;
 
-    // Benches
-    const benchGeo = mergeGeometries([
-      box(2.2, 0.12, 0.55, 0, 0.5, 0, 0x8a5a32),
-      box(2.2, 0.5, 0.1, 0, 0.75, -0.28, 0x8a5a32),
-    ])!;
-    const benchSpots = spots.filter((_, i) => i % 5 === 2);
-    this.instanced(benchGeo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }), benchSpots);
-    for (const s of benchSpots) this.colliders.push({ x: s.x, z: s.z, hx: 1.1, hz: 0.3, kind: 'prop' });
+    // Benches (off by default: they crowded the kerb with the lamps).
+    const benchSpots = this.pickSpots(spots, CITY_DRESSING.benchEvery, Math.floor(CITY_DRESSING.lampEvery / 2));
+    if (benchSpots.length) {
+      const benchGeo = mergeGeometries([
+        box(2.2, 0.12, 0.55, 0, 0.5, 0, 0x8a5a32),
+        box(2.2, 0.5, 0.1, 0, 0.75, -0.28, 0x8a5a32),
+      ])!;
+      this.instanced(benchGeo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }), benchSpots);
+      for (const s of benchSpots) this.colliders.push({ x: s.x, z: s.z, hx: 1.1, hz: 0.3, kind: 'prop' });
+    }
 
-    // Hydrants
-    const hydrantGeo = new THREE.CylinderGeometry(0.18, 0.22, 0.7, 16);
-    hydrantGeo.translate(0, 0.35, 0);
-    const hydrantSpots = spots.filter((_, i) => i % 9 === 4);
-    this.instanced(hydrantGeo, new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 0.7 }), hydrantSpots);
-    for (const s of hydrantSpots) this.colliders.push({ x: s.x, z: s.z, hx: 0.25, hz: 0.25, kind: 'prop' });
+    // Hydrants (off by default: tiny clutter at street level).
+    const hydrantSpots = this.pickSpots(spots, CITY_DRESSING.hydrantEvery, Math.floor(CITY_DRESSING.lampEvery / 2) + 1);
+    if (hydrantSpots.length) {
+      const hydrantGeo = new THREE.CylinderGeometry(0.18, 0.22, 0.7, 16);
+      hydrantGeo.translate(0, 0.35, 0);
+      this.instanced(hydrantGeo, new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 0.7 }), hydrantSpots);
+      for (const s of hydrantSpots) this.colliders.push({ x: s.x, z: s.z, hx: 0.25, hz: 0.25, kind: 'prop' });
+    }
 
-    // Park trees + sidewalk trees
+    // Park trees (kept) + a few sidewalk trees.
     const trunkGeo = new THREE.CylinderGeometry(0.18, 0.3, 2.4, 12);
     trunkGeo.translate(0, 1.2, 0);
     const canopyGeo = new THREE.IcosahedronGeometry(1.9, 2);
@@ -529,24 +611,24 @@ export class City implements CityWorld {
       if (Math.abs(x - park.cx) < 15 || Math.abs(z - park.cz) < 15) continue;
       treeSpots.push({ x, z, s: 0.9 + rng() * 0.4 });
     }
-    const sidewalkTrees = spots.filter((_, i) => i % 7 === 3);
+    const sidewalkTrees = this.pickSpots(spots, CITY_DRESSING.treeEvery, Math.floor(CITY_DRESSING.lampEvery / 2));
     for (const s of sidewalkTrees) treeSpots.push({ x: s.x, z: s.z, s: 0.8 });
     this.instanced(trunkGeo, new THREE.MeshStandardMaterial({ color: 0x6b4a2e, roughness: 1 }), treeSpots);
     this.instanced(canopyGeo, new THREE.MeshStandardMaterial({ color: 0x4a9445, roughness: 0.9, envMapIntensity: 0.6 }), treeSpots, true);
     for (const s of treeSpots) this.colliders.push({ x: s.x, z: s.z, hx: 0.4, hz: 0.4, kind: 'prop' });
 
-    // Traffic lights at every intersection corner (poles + heads).
+    // Traffic lights: keep them at every intersection, on one diagonal of corners.
     const tlGeo = new THREE.CylinderGeometry(0.09, 0.11, 4.4, 12);
     tlGeo.translate(0, 2.2, 0);
-    const tlSpots: Array<{ x: number; z: number }> = [];
+    const tlCorners: Array<{ x: number; z: number }> = [];
     for (let i = 0; i < STREETS; i++) {
       for (let j = 0; j < STREETS; j++) {
         const hx = streetHalfWidth(i);
         const hz = streetHalfWidth(j);
-        tlSpots.push({ x: nsX(i) - hx - 0.8, z: ewZ(j) - hz - 0.8 });
-        tlSpots.push({ x: nsX(i) + hx + 0.8, z: ewZ(j) + hz + 0.8 });
+        tlCorners.push({ x: nsX(i) + hx + 0.8, z: ewZ(j) + hz + 0.8 });
       }
     }
+    const tlSpots = CITY_DRESSING.trafficLightEvery <= 1 ? tlCorners : tlCorners.filter((_, i) => i % CITY_DRESSING.trafficLightEvery === 0);
     this.instanced(tlGeo, new THREE.MeshStandardMaterial({ color: 0x2b2f35, roughness: 0.6 }), tlSpots);
     const headGeo2 = new THREE.BoxGeometry(0.35, 0.9, 0.35);
     headGeo2.translate(0, 4.2, 0);

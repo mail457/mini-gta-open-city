@@ -128,6 +128,10 @@ class FakeAudio implements AudioBus {
 }
 
 class FakeHud implements HudApi {
+  crosshairVisible = false;
+  hitMarkers = 0;
+  setCrosshair(v: boolean): void { this.crosshairVisible = v; }
+  pulseHitMarker(): void { this.hitMarkers++; }
   readonly toasts: Array<{ text: string; kind: string }> = [];
   readonly results: MissionResultView[] = [];
   updates = 0;
@@ -144,6 +148,7 @@ class FakeHud implements HudApi {
 }
 
 class FakeWorld implements CityWorld {
+  kerbBlocking = true;
   readonly group = new THREE.Group();
   bounds = { minX: -50, maxX: 50, minZ: -50, maxZ: 50 };
   readonly roadGraph = makeRoadGraph();

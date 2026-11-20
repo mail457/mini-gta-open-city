@@ -1343,3 +1343,54 @@ body {
   letter-spacing: 0.02em;
 }
 #ui-root .mg-quickkey .mg-kbd { min-width: 26px; }
+
+/* ---- Crosshair, hit marker, ammo ----------------------------------------- */
+#ui-root .mg-crosshair {
+  --ch-kick: 0px;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  /* A real 40×40 box (not 0×0): keeps the centre exact while giving the element
+     an accessible hit-box for tooling and screen readers. */
+  width: 40px;
+  height: 40px;
+  margin: -20px 0 0 -20px;
+  pointer-events: none;
+}
+#ui-root .mg-crosshair[hidden] { display: none !important; }
+#ui-root .mg-crosshair > span:not(.mg-hitmark) {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.85);
+  border-radius: 1px;
+}
+#ui-root .mg-ch-t { width: 2px; height: 9px; left: 19px; top: calc(6px - var(--ch-kick)); }
+#ui-root .mg-ch-b { width: 2px; height: 9px; left: 19px; top: calc(25px + var(--ch-kick)); }
+#ui-root .mg-ch-l { width: 9px; height: 2px; top: 19px; left: calc(6px - var(--ch-kick)); }
+#ui-root .mg-ch-r { width: 9px; height: 2px; top: 19px; left: calc(25px + var(--ch-kick)); }
+#ui-root .mg-ch-dot { width: 3px; height: 3px; left: 18.5px; top: 18.5px; border-radius: 50%; background: var(--gold, #ffcf3f) !important; }
+#ui-root .mg-hitmark {
+  position: absolute;
+  left: 9px; top: 9px;
+  width: 22px; height: 22px;
+  opacity: 0;
+  background:
+    linear-gradient(45deg, transparent 45%, #ff4d4d 45% 55%, transparent 55%),
+    linear-gradient(-45deg, transparent 45%, #ff4d4d 45% 55%, transparent 55%);
+}
+#ui-root .mg-hitmark.mg-hit { animation: mg-hit 260ms ease-out both; }
+@keyframes mg-hit { 0% { opacity: 1; transform: scale(0.6); } 100% { opacity: 0; transform: scale(1.35); } }
+#ui-root .mg-ammo {
+  position: absolute;
+  right: var(--pad, 16px);
+  bottom: calc(var(--pad, 16px) + 96px);
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: rgba(10, 14, 22, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font: 800 18px/1 ui-monospace, "SF Mono", Menlo, monospace;
+  letter-spacing: 0.04em;
+}
+#ui-root .mg-ammo[hidden] { display: none !important; }
+#ui-root .mg-ammo.mg-empty { color: #ff6b6b; }

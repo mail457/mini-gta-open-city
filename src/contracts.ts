@@ -42,7 +42,11 @@ export interface XZ {
 /* -------------------------------------------------------------------------- */
 
 export interface InputFrame {
-  /** Movement axis X: -1 (left/A) .. +1 (right/D) */
+  /**
+   * CONVENTION (frozen): +1 = RIGHT (D / →), −1 = LEFT (A / ←), in the
+   * player's VIEW space. Consumers: walking uses it as camera-right; driving
+   * uses it as steer-right. `Input` must map A/← to −1 and D/→ to +1.
+   */
   moveX: number;
   /** Movement axis Y: -1 (back/S) .. +1 (forward/W) */
   moveY: number;
@@ -98,6 +102,11 @@ export interface CollisionService {
    * Used by traffic AI and the mission to keep waypoints sane.
    */
   isRoad(x: number, z: number): boolean;
+  /**
+   * When true, cars are kept on asphalt (they stop at kerbs). When false they
+   * may leave the road (driving into the city) but still collide with buildings.
+   */
+  kerbBlocking: boolean;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -260,6 +269,10 @@ export interface NPCSystemApi {
   update(dt: number, playerPos: XZ, drivenVehicle: Vehicle | null): void;
   /** Downsampled positions for the minimap (max ~60 entries each). */
   minimapData(): { cars: XZ[]; peds: XZ[] };
+  /** Living pedestrians the player can shoot (id + centre of mass). */
+  targetablePedestrians(): Array<{ id: number; position: THREE.Vector3 }>;
+  /** Apply bullet damage; a pedestrian hit hard enough is knocked down and respawns later. */
+  damagePedestrian(id: number, amount: number, from: XZ): void;
   /** Vehicle meshes created for traffic so the player can also enter them. */
   readonly trafficVehicles: readonly Vehicle[];
   dispose(): void;
@@ -343,6 +356,10 @@ export interface HudData {
   prompt?: { key: string; text: string } | null;
   /** One-line objective help, rendered directly under the mission panel. */
   hint?: string | null;
+  /** Weapon ammo for the HUD, or null when the player is not armed. */
+  ammo?: { mag: number; reserve: number; name: string } | null;
+  /** Recoil kick 0..1 for a crosshair pulse (decays quickly). */
+  hitFlash?: number;
 }
 
 export interface MissionResultView {
@@ -364,6 +381,34 @@ export interface HudApi {
    */
   showMissionResult(result: MissionResultView, actions?: { onContinue?: () => void; onRestart?: () => void }): void;
   clearMissionResult(): void;
+  /** Show/hide the aiming crosshair (armed and on foot). */
+  setCrosshair(visible: boolean, kick?: number): void;
+  /** Hit marker flash on the crosshair after a hit. */
+  pulseHitMarker(): void;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Shooting (src/entities/weapon.ts + src/game/shooting.ts)                   */
+/* -------------------------------------------------------------------------- */
+
+export type WeaponId = 'pistol' | 'smg';
+
+export interface WeaponSpec {
+  id: WeaponId;
+  label: string;
+  damage: number;
+  /** Seconds between shots. */
+  cooldown: number;
+  /** Magazine size, reserve rounds on start. */
+  magSize: number;
+  reserve: number;
+  /** Spread cone half-angle in radians (hip fire). */
+  spread: number;
+  /** Maximum range in metres. */
+  range: number;
+  /** World units of recoil (camera kick). */
+  kick: number;
+  auto: boolean;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -385,6 +430,9 @@ export interface DebugSnapshot {
   money: number;
   health: number;
   elapsed: number;
+  weapon: { id: WeaponId; mag: number; reserve: number; armed: boolean } | null;
+  shotsFired: number;
+  hits: number;
   npcCount: number;
   vehicleCount: number;
   buildings: number;

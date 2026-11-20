@@ -102,6 +102,9 @@ export class Foundation {
         buildings: 7,
         drawCalls: this.engine.renderer.info.render.calls,
         fps: this.engine.fps,
+        weapon: null,
+        shotsFired: 0,
+        hits: 0,
       }),
       setSimSpeed: (m) => {
         this.engine.simSpeed = m;

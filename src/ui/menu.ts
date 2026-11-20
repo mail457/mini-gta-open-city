@@ -21,8 +21,10 @@ const CONTROLS: Array<[string[], string]> = [
   [['Shift'], 'Sprint'],
   [['Space'], 'Jump · handbrake'],
   [['E'], 'Enter / exit vehicle'],
+  [['LMB'], 'Fire weapon'],
+  [['R', '1', '2'], 'Reload · pistol / SMG'],
   [['Esc', 'P'], 'Pause'],
-  [['R'], 'Restart run'],
+  [['⌫'], 'Restart run'],
   [['M'], 'Mute sound'],
 ];
 
@@ -102,7 +104,7 @@ export function createScreens(root: HTMLElement, cb: ScreenCallbacks): MenuScree
   // Essential keys, shown before the player even starts.
   const quick = document.createElement('div');
   quick.className = 'mg-quickkeys';
-  for (const [keys, label] of [['WASD', 'walk / drive'], ['Mouse', 'look'], ['E', 'enter / exit car'], ['Esc', 'pause']] as Array<[string, string]>) {
+  for (const [keys, label] of [['WASD', 'walk / drive'], ['Mouse', 'look / fire'], ['E', 'enter / exit car'], ['Esc', 'pause']] as Array<[string, string]>) {
     const item = document.createElement('span');
     item.className = 'mg-quickkey';
     item.append(kbd(keys), document.createTextNode(label));

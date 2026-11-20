@@ -1,15 +1,19 @@
 /**
- * Smooth-shaded city building kit (Lead-authored).
+ * Smooth-shaded city building kit (Lead-authored; facade rewrite by QA).
  *
  * Replaces the flat box + band look with:
- *  - chamfered (18°-bevelled) vertical corners and roof edges, smooth-shaded, so
- *    sunlight wraps around edges the way it does on real facades;
- *  - window bays: recessed dark glass panels with a light lintel/sill trim, a
- *    frame colour sampled from the facade material family;
- *  - a cornice, parapet and rooftop plant (AC units, water tanks, antennae);
- *  - storefronts with awnings on ground-floor street frontage.
+ *  - a clean, chamfered (bevelled) building body, smooth-shaded, so sunlight wraps
+ *    around the vertical corners the way it does on real facades;
+ *  - one simple, evenly spaced window grid on all four faces: a dark recessed
+ *    glass plate with a light sill under it (no lintels/jambs/dormers/mullions);
+ *  - a thin cornice band under the roof line, a parapet and rooftop plant.
  * Everything for each building is merged into ONE geometry per style bucket so the
- * whole skyline stays inside a handful of draw calls.
+ * whole skyline stays inside a handful of draw calls, and each bucket is ONE
+ * surface (no coplanar overlapping faces that z-fight).
+ *
+ * Uses plain merged boxes rather than ExtrudeGeometry: extrusions triple the
+ * vertex budget and their bevel faces are what caused the old facade to read as
+ * a chaotic mask once the window grid landed (see BUILDING-VISIBILITY notes).
  */
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
@@ -18,8 +22,9 @@ export interface BuildingStyle {
   wall: number;
   trim: number;
   glass: number;
-  /** Window spacing in metres. */
+  /** Window spacing in metres (horizontal). */
   bay: number;
+  /** Floor-to-floor height in metres (vertical window pitch). */
   floor: number;
 }
 
@@ -32,7 +37,6 @@ export const BUILDING_STYLES: BuildingStyle[] = [
   { wall: 0xd9b48a, trim: 0xf6e6cf, glass: 0x2d2a26, bay: 2.6, floor: 3.1 }, // terracotta
 ];
 
-const cache = new Map<string, THREE.BufferGeometry>();
 const tmpColor = new THREE.Color();
 
 function colorize(input: THREE.BufferGeometry, color: number): THREE.BufferGeometry {
@@ -50,46 +54,34 @@ function colorize(input: THREE.BufferGeometry, color: number): THREE.BufferGeome
   return geo;
 }
 
-/** Bevelled box: chamfered vertical corners and rounded top/bottom edges. */
-function chamferedBox(w: number, h: number, d: number, bevel = 0.28): THREE.BufferGeometry {
-  const shape = new THREE.Shape();
+/** Box with its footprint chamfered (bevelled vertical corners). */
+function chamferedSlab(w: number, h: number, d: number, bevel = 0.3): THREE.BufferGeometry {
   const x = w / 2;
   const y = d / 2;
-  const b = Math.min(bevel, x * 0.4, y * 0.4);
+  const b = Math.max(0.02, Math.min(bevel, x * 0.4, y * 0.4));
+  const shape = new THREE.Shape();
   shape.moveTo(-x + b, -y);
   shape.lineTo(x - b, -y);
-  shape.quadraticCurveTo(x, -y, x, -y + b);
+  shape.lineTo(x, -y + b);
   shape.lineTo(x, y - b);
-  shape.quadraticCurveTo(x, y, x - b, y);
+  shape.lineTo(x - b, y);
   shape.lineTo(-x + b, y);
-  shape.quadraticCurveTo(-x, y, -x, y - b);
+  shape.lineTo(-x, y - b);
   shape.lineTo(-x, -y + b);
-  shape.quadraticCurveTo(-x, -y, -x + b, -y);
-  const geo = new THREE.ExtrudeGeometry(shape, {
-    depth: Math.max(0.1, h - bevel * 2),
-    bevelEnabled: true,
-    bevelThickness: bevel * 0.8,
-    bevelSize: bevel * 0.6,
-    bevelSegments: 2,
-    curveSegments: 4,
-  });
+  shape.lineTo(-x + b, -y);
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: Math.max(0.1, h), bevelEnabled: false, curveSegments: 1 });
   geo.rotateX(-Math.PI / 2);
-  geo.translate(0, bevel * 0.8 + 0, 0);
+  geo.translate(0, h, 0);
   geo.computeVertexNormals();
   return geo;
 }
 
-/** Window: recessed glass plate + frame bar above/below. */
-function windowBay(w: number, h: number, depth: number, trimDepth: number): { glass: THREE.BufferGeometry; trim: THREE.BufferGeometry } {
-  const glass = new THREE.BoxGeometry(w, h, depth).toNonIndexed();
-  glass.translate(0, h / 2, 0);
-  const trim = mergeGeometries([
-    new THREE.BoxGeometry(w + 0.22, 0.12, trimDepth).translate(0, h + 0.06, 0.02),
-    new THREE.BoxGeometry(w + 0.18, 0.1, trimDepth * 1.4).translate(0, -0.05, 0.06),
-    new THREE.BoxGeometry(0.08, h, trimDepth * 0.6).translate(-w / 2 - 0.04, h / 2, 0.03),
-    new THREE.BoxGeometry(0.08, h, trimDepth * 0.6).translate(w / 2 + 0.04, h / 2, 0.03),
-  ].map((g) => g.toNonIndexed()))!;
-  return { glass, trim };
+/** Reusable unit box (no uv) translated to the given world position. */
+function box(w: number, h: number, d: number, x: number, y: number, z: number): THREE.BufferGeometry {
+  const geo = new THREE.BoxGeometry(w, h, d).toNonIndexed();
+  geo.deleteAttribute('uv');
+  geo.translate(x, y, z);
+  return geo;
 }
 
 /** Redraw old-style building definition into smooth geometry. */
@@ -102,66 +94,82 @@ export interface BuildingGeoSpec {
   style: number;
 }
 
+/** Ground-floor plinth height (windows start above it). */
+const BASE_HEIGHT = 3.2;
+/** How far the glass sits inside the wall face (metres). */
+const GLASS_RECESS = 0.25;
+/** Glass panel size as a fraction of the bay width / floor height. */
+const GLASS_W = 0.56;
+const GLASS_H = 0.5;
+
 /**
- * Builds one merged geometry for a building. `faceFlags` marks which faces touch
- * a street (storefronts + denser windows on those).
+ * Builds one merged geometry for a building: the stone/concrete body (with
+ * parapet and cornice), the glass window grid and the light sill trims.
  */
 export function buildBuildingGeometry(spec: BuildingGeoSpec): { wall: THREE.BufferGeometry; glass: THREE.BufferGeometry; trim: THREE.BufferGeometry } {
-  const key = `${spec.hx.toFixed(1)}|${spec.hz.toFixed(1)}|${spec.h.toFixed(1)}|${spec.style}`;
-  void key;
   const st = BUILDING_STYLES[spec.style % BUILDING_STYLES.length];
   const walls: THREE.BufferGeometry[] = [];
   const glass: THREE.BufferGeometry[] = [];
   const trims: THREE.BufferGeometry[] = [];
 
-  const body = chamferedBox(spec.hx * 2, spec.h, spec.hz * 2, 0.32);
-  walls.push(colorize(body, st.wall));
+  // Body + parapet (same colour family so the tower reads as one mass).
+  walls.push(colorize(chamferedSlab(spec.hx * 2, spec.h, spec.hz * 2, 0.34), st.wall));
+  const parapetH = 0.7;
+  const parapetIn = 0.3;
+  walls.push(
+    colorize(
+      chamferedSlab(spec.hx * 2 - parapetIn * 2, parapetH, spec.hz * 2 - parapetIn * 2, 0.2).translate(0, spec.h, 0),
+      st.wall,
+    ),
+  );
+  // Cornice: a slim overhanging band just under the parapet.
+  trims.push(colorize(box(spec.hx * 2 + 0.5, 0.42, spec.hz * 2 + 0.5, 0, spec.h - 0.21, 0), st.trim));
 
-  // Cornice + parapet.
-  const cornice = chamferedBox(spec.hx * 2 + 0.5, 0.45, spec.hz * 2 + 0.5, 0.1);
-  cornice.translate(0, spec.h - 0.2, 0);
-  trims.push(colorize(cornice, st.trim));
-  const parapet = chamferedBox(spec.hx * 2 - 0.3, 0.55, spec.hz * 2 - 0.3, 0.06);
-  parapet.translate(0, spec.h + 0.35, 0);
-  walls.push(colorize(parapet, st.wall));
-
-  // Ground-floor base band (stone plinth).
-  const plinth = chamferedBox(spec.hx * 2 + 0.25, 0.9, spec.hz * 2 + 0.25, 0.08);
-  plinth.translate(0, 0.0, 0);
-  trims.push(colorize(plinth, st.trim));
-
-  // Facade window grid on the four faces.
-  const floors = Math.max(1, Math.floor((spec.h - 4.2) / st.floor));
+  // One even window grid on the four faces: a glass cell + a sill per floor/bay.
+  const ww = Math.max(0.8, st.bay * GLASS_W);
+  const wh = Math.max(1.0, st.floor * GLASS_H);
+  const sillH = 0.12;
+  const sillOut = 0.08;
+  const floors = Math.max(0, Math.floor((spec.h - BASE_HEIGHT - 0.6) / st.floor));
   // `ry` = rotation about Y for that face (0 faces +Z, PI/2 faces +X, ...).
-  const faces: Array<{ ry: number; len: number; nx: number; nz: number; alongX: boolean }> = [
-    { ry: 0, len: spec.hx * 2, nx: 0, nz: 1, alongX: true },
-    { ry: Math.PI, len: spec.hx * 2, nx: 0, nz: -1, alongX: true },
-    { ry: Math.PI / 2, len: spec.hz * 2, nx: 1, nz: 0, alongX: false },
-    { ry: -Math.PI / 2, len: spec.hz * 2, nx: -1, nz: 0, alongX: false },
+  const faces: Array<{ ry: number; len: number; nx: number; nz: number; alongX: boolean; half: number }> = [
+    { ry: 0, len: spec.hx * 2, nx: 0, nz: 1, alongX: true, half: spec.hz },
+    { ry: Math.PI, len: spec.hx * 2, nx: 0, nz: -1, alongX: true, half: spec.hz },
+    { ry: Math.PI / 2, len: spec.hz * 2, nx: 1, nz: 0, alongX: false, half: spec.hx },
+    { ry: -Math.PI / 2, len: spec.hz * 2, nx: -1, nz: 0, alongX: false, half: spec.hx },
   ];
-  const ww = Math.min(1.55, st.bay * 0.55);
-  const wh = st.floor * 0.52;
+  const rot = new THREE.Matrix4();
   for (const f of faces) {
-    const cols = Math.max(1, Math.floor((f.len - 1.2) / st.bay));
-    const start = -((cols - 1) * st.bay) / 2;
+    const cols = Math.max(1, Math.floor((f.len - 1.0) / st.bay));
+    // Even spacing: distribute any leftover facade width into equal gaps.
+    const pitch = (f.len - 0.8) / cols;
+    const start = -((cols - 1) * pitch) / 2;
+    const faceX = f.nx * f.half;
+    const faceZ = f.nz * f.half;
     for (let fl = 0; fl < floors; fl++) {
-      const y = 4.0 + fl * st.floor;
+      const cy = BASE_HEIGHT + fl * st.floor + wh / 2;
       for (let c = 0; c < cols; c++) {
-        const along = start + c * st.bay;
-        const { glass: gw, trim: tw } = windowBay(ww, wh, 0.12, 0.16);
-        const rot = new THREE.Matrix4().makeRotationY(f.ry);
-        const place = (geo: THREE.BufferGeometry) => {
-          geo.applyMatrix4(rot);
-          geo.translate(
-            spec.x + (f.alongX ? along : 0) + f.nx * spec.hx,
-            y,
-            spec.z + (f.alongX ? 0 : along) + f.nz * spec.hz,
-          );
-        };
-        place(gw);
-        place(tw);
-        glass.push(gw);
-        trims.push(colorize(tw, st.trim));
+        const along = start + c * pitch;
+        // Glass: recessed into the wall (its outer face is GLASS_RECESS behind).
+        const g = box(ww, wh, 0.2, 0, 0, 0);
+        rot.makeRotationY(f.ry);
+        g.applyMatrix4(rot);
+        g.translate(
+          spec.x + (f.alongX ? along : 0) + faceX + f.nx * -GLASS_RECESS,
+          cy,
+          spec.z + (f.alongX ? 0 : along) + faceZ + f.nz * -GLASS_RECESS,
+        );
+        glass.push(g);
+        // Sill: light stone lip just under the opening, proud of the wall.
+        const s = box(ww + 0.3, sillH, 0.16, 0, 0, 0);
+        rot.makeRotationY(f.ry);
+        s.applyMatrix4(rot);
+        s.translate(
+          spec.x + (f.alongX ? along : 0) + faceX + f.nx * sillOut,
+          cy - wh / 2 - sillH / 2,
+          spec.z + (f.alongX ? 0 : along) + faceZ + f.nz * sillOut,
+        );
+        trims.push(colorize(s, st.trim));
       }
     }
   }

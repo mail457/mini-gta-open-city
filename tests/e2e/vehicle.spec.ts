@@ -25,10 +25,14 @@ test('enter a car, accelerate with W, handbrake with Space, exit beside the car'
   const travelled = Math.max(Math.hypot(later.vehicle!.x - start.x, later.vehicle!.z - start.z), Math.abs(later.vehicle!.speed) * 0.4);
   expect(travelled).toBeGreaterThan(0.3);
   expect(Math.abs(later.vehicle!.speed)).toBeLessThanOrEqual(60);
-  // A kerb must never let the car leave the road surface: stopping is expected.
+  // Free roam: the player may now drive off the road (buildings still block), so we
+  // only assert the car never reaches an impossible speed and never tunnels away.
   await page.waitForTimeout(2500);
   const settled = await snapshot(page);
-  expect(Math.abs(settled.vehicle!.speed)).toBeLessThan(3);
+  expect(Math.abs(settled.vehicle!.speed)).toBeLessThan(40);
+  expect(Number.isFinite(settled.vehicle!.x) && Number.isFinite(settled.vehicle!.z)).toBe(true);
+  expect(Math.abs(settled.vehicle!.x)).toBeLessThan(200);
+  expect(Math.abs(settled.vehicle!.z)).toBeLessThan(200);
 
   // Handbrake -> slows hard.
   await page.keyboard.up('KeyW');

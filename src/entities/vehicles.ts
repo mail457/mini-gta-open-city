@@ -10,9 +10,10 @@
  *
  * Integration model (per stepDriven call):
  *   1. throttle / brake / handbrake / rolling resistance → forward speed
- *   2. steering yaw rate (speed dependent, reversed in reverse)
- *   3. lateral slip velocity: the old forward vector keeps some of the car's
- *      momentum while the car rotates; grip pulls it back to zero
+ *   2. steering: the wheel angle ramps towards the input, then the speed-dependent
+ *      yaw rate (reversed while reversing) turns the car
+ *   3. lateral slip velocity: turning the nose makes the rear slide the opposite
+ *      way (speed × turn angle); grip pulls that slide back to zero
  *   4. integrate in sub-steps ≤ 0.5 m of travel; at each sub-step sampled as
  *      3 circles along the car's length, pushed out of `world.resolveCircle`
  *   5. clamp y to groundHeight, clamp x/z to the world bounds
@@ -88,6 +89,8 @@ export const VEHICLE_FEEL = {
   drag: 0.0016,
   /** Base fraction of forward speed kept as lateral momentum per radian turned (0..1). */
   driftFactor: 0.42,
+  /** How fast the wheel angle follows the steering input (1/s, ~0.1 s to full lock). */
+  steerResponse: 20,
   /** Extra drift kept while the handbrake is down (0..1). */
   handbrakeDriftFactor: 0.82,
   /** How quickly grip eats lateral velocity (1/s), before grip scaling. */
@@ -146,6 +149,11 @@ export class VehicleSystem implements VehiclePhysicsApi {
   // Scratch state for visuals (allocation-free per frame).
   /** Per-vehicle visual state; cleared when a vehicle's mesh is replaced. */
   readonly visualState = new WeakMap<Vehicle, VisualState>();
+  /**
+   * Smoothed wheel angle for the player-driven car (see stepDriven): the input
+   * ramps in/out over ~0.1 s instead of snapping from +1 to −1 in one frame.
+   */
+  private steerState = 0;
   private readonly tmp: THREE.Vector3 = new THREE.Vector3();
 
   /** Optional world: used to keep vehicles on the road instead of on pavements. */
@@ -311,28 +319,45 @@ export class VehicleSystem implements VehiclePhysicsApi {
     const yawBefore = v.yaw;
     const absSpeed = Math.abs(speed);
     // Low speed: limited authority but never zero (the car can pivot);
-    // high speed: squared falloff for stability (sport falls off harder through grip too).
+    // high speed: squared falloff for stability.
     const lowFactor = F.lowSpeedSteer + (1 - F.lowSpeedSteer) * clamp(absSpeed / F.steerFullSpeed, 0, 1);
     const topRatio = clamp(absSpeed / spec.maxSpeed, 0, 1);
     const highFactor = 1 - (1 - F.highSpeedStability) * topRatio * topRatio;
     const handbrakeBoost = handbrake ? F.handbrakeYawBoost : 1;
-    const reverseSign = speed < -0.05 ? -1 : 1; // steering flips in reverse, like a real car
-    const yawRate = steer * spec.steerRate * lowFactor * highFactor * handbrakeBoost * reverseSign * throttleAuthority(throttle, absSpeed);
-    v.yaw = yawBefore + yawRate * dt;
+    // steer = +1 is RIGHT (contract). forward = (−sin yaw, −cos yaw), so turning
+    // right means yaw DECREASES: yawRate = −steer · steerRate … .
+    // Reversing at speed flips the sign like a real car (but never at a crawl,
+    // where the driver is just correcting); this is not merged, here
+    // is where it happens: below 1 m/s in reverse steering follows the driver.
+    const doNotSnap = spec.grip > 0.9 ? 0.6 : 1; // vans feel heavier to turn
+    // Wheel angle: ramp towards the input so the car never snaps its heading in one frame.
+    if (!Number.isFinite(this.steerState)) this.steerState = 0;
+    this.steerState += (steer - this.steerState) * (1 - Math.exp(-F.steerResponse * dt));
+    // The wheel angle is smoothed BEFORE the reverse flip: smoothing a rate that
+    // already carries `reverseSign` would make a reverse turn start the wrong way.
+    const reverseSign = speed < -1 ? -1 : 1;
+    const targetYawRate =
+      -this.steerState * spec.steerRate * lowFactor * highFactor * handbrakeBoost * reverseSign *
+      throttleAuthority(throttle, absSpeed) * doNotSnap;
+    const yawDelta = targetYawRate * dt; // radians turned this step (drives the tyre slip below)
+    v.yaw = yawBefore + yawDelta;
 
     /* ---------------- 3. lateral slip (drift) ---------------- */
-    // Recompose the velocity vector into the NEW car frame: what was forward
-    // partly becomes sideways. Grip then damps the sideways part back towards the nose.
+    // Velocity relative to the (already rotated) car frame. Grip then damps the
+    // sideways part back towards the nose, so the car follows the steering.
     const fx = -Math.sin(v.yaw);
     const fz = -Math.cos(v.yaw);
     const lx = fz; // left of forward = (fz, -fx)
     const lz = -fx;
-    const oldFx = -Math.sin(yawBefore);
-    const oldFz = -Math.cos(yawBefore);
-    const rotated = oldFx * fx + oldFz * fz; // cos(deltaYaw)
-    const slip = (-speed * oldFx * lx - speed * oldFz * lz) + v.lateralSpeed * rotated;
+    // Tyre slip: momentum keeps the path straight for a moment while the nose
+    // turns, so the nose (travelling along forward) sits AHEAD of the velocity:
+    // that is `–speed · turn angle` towards the car's LEFT. The rear therefore
+    // slides outwards, opposite the turn, like a real car.
+    // (The old project-composition had this sign inverted: the car's path bent
+    // away from the turn, so A barely curved left and D looked like "left".)
+    let lateral = -speed * Math.sin(yawDelta) + v.lateralSpeed * Math.cos(yawDelta);
     const keep = handbrake ? F.handbrakeDriftFactor : F.driftFactor;
-    let lateral = slip * keep;
+    lateral *= keep;
     // Grip pulls the lateral velocity back to 0 (lower grip = slides longer).
     const gripLambda = F.lateralDamp * spec.grip * (handbrake ? 0.3 : 1);
     lateral *= Math.exp(-gripLambda * dt);
@@ -393,7 +418,7 @@ export class VehicleSystem implements VehiclePhysicsApi {
           let dz = p.z - cz;
           // Cars do not hop kerbs: if this circle would end up on pavement, push it
           // back towards the road instead (the building colliders still stop real walls).
-          if (!dx && !dz && this.world && !this.world.isRoad(p.x, p.z)) {
+          if (!dx && !dz && this.world && this.world.isRoad !== undefined && !this.world.kerbBlocking && !this.world.isRoad(p.x, p.z)) {
             const back = this.world.isRoad(v.position.x, v.position.z)
               ? { x: v.position.x - p.x, z: v.position.z - p.z }
               : { x: -vx, z: -vz };

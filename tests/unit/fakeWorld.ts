@@ -10,6 +10,8 @@
 import type { CollisionService, Rect, XZ } from '../../src/contracts';
 
 export class FakeWorld implements CollisionService {
+  /** Cars stop at kerbs in these tests unless a test opts out. */
+  kerbBlocking = true;
   readonly colliders: Rect[] = [];
   readonly minX: number;
   readonly maxX: number;

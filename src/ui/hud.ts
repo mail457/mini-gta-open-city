@@ -256,6 +256,8 @@ export const HUD_TESTIDS = {
   restartBtn: 'restart-button',
   prompt: 'action-prompt',
   hint: 'objective-hint',
+  crosshair: 'crosshair',
+  ammo: 'ammo',
 } as const;
 
 export function createHud(root: HTMLElement, options: HudOptions = {}): HudController {
@@ -449,7 +451,19 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): HudContr
   const promptText = document.createElement('span');
   promptText.className = 'mg-prompt-text';
   prompt.append(promptKey, promptText);
-  hudRoot.append(tr, missionPanel, prompt, compass, minimap, speedo, toasts);
+  /* ------------------------------ Crosshair ------------------------------- */
+  const crosshair = document.createElement('div');
+  crosshair.className = 'mg-crosshair';
+  crosshair.dataset.testid = HUD_TESTIDS.crosshair;
+  crosshair.hidden = true;
+  crosshair.innerHTML =
+    '<span class="mg-ch-t"></span><span class="mg-ch-r"></span><span class="mg-ch-b"></span><span class="mg-ch-l"></span><span class="mg-ch-dot"></span><span class="mg-hitmark"></span>';
+  const ammoEl = document.createElement('div');
+  ammoEl.className = 'mg-ammo';
+  ammoEl.dataset.testid = HUD_TESTIDS.ammo;
+  ammoEl.hidden = true;
+
+  hudRoot.append(tr, missionPanel, prompt, crosshair, ammoEl, compass, minimap, speedo, toasts);
 
   /* ---------------------------- Mission result ----------------------------- */
 
@@ -936,6 +950,20 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): HudContr
       } else if (!hintEl.hidden) {
         hintEl.hidden = true;
       }
+      // Ammo readout for the armed player.
+      const ammo = data.ammo ?? null;
+      if (ammo) {
+        if (ammoEl.hidden) ammoEl.hidden = false;
+        const text = `${ammo.mag} / ${ammo.reserve}`;
+        if (ammoEl.textContent !== `${ammo.name}\u0000${text}`) {
+          ammoEl.textContent = text;
+          ammoEl.dataset.name = ammo.name;
+        }
+        if (ammo.mag === 0) ammoEl.classList.add('mg-empty');
+        else ammoEl.classList.remove('mg-empty');
+      } else if (!ammoEl.hidden) {
+        ammoEl.hidden = true;
+      }
       const label = typeof data.timeOfDayLabel === 'string' ? data.timeOfDayLabel : '';
       if (cached.clock !== label) {
         cached.clock = label;
@@ -990,6 +1018,21 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): HudContr
     },
 
     clearMissionResult,
+
+    setCrosshair(show: boolean, kick = 0): void {
+      if (disposed) return;
+      if (crosshair.hidden === show) crosshair.hidden = !show;
+      if (show) crosshair.style.setProperty('--ch-kick', `${Math.round(kick * 10)}px`);
+    },
+
+    pulseHitMarker(): void {
+      if (disposed) return;
+      const m = crosshair.querySelector('.mg-hitmark') as HTMLElement | null;
+      if (!m) return;
+      m.classList.remove('mg-hit');
+      void m.offsetWidth; // restart the animation
+      m.classList.add('mg-hit');
+    },
 
     setVisible(show: boolean): void {
       visible = show;

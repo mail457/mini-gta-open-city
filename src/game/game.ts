@@ -29,6 +29,7 @@ import { ThirdPersonCamera } from '../core/camera';
 import { AUDIO } from '../core/audioRef';
 import { createSky } from './sky';
 import { PERF } from '../core/probe';
+import { createWeaponState, refill, switchWeapon, WeaponSystem, type ShotTarget } from '../entities/weapon';
 import { createWorld } from '../world/world';
 import { Player } from '../entities/player';
 import { VehicleSystem } from '../entities/vehicles';
@@ -39,7 +40,7 @@ import { createMission } from '../gameplay/mission';
 import { GameState } from '../gameplay/gameState';
 import { nsX, ewZ, streetHalfWidth } from '../world/layout';
 import { blockRect } from '../world/cityLayout';
-import type { VehicleTypeId } from '../contracts';
+import type { VehicleTypeId, WeaponId } from '../contracts';
 
 export interface GameDeps {
   /** Builders injected by main.ts (keeps this file free of UI import cycles). */
@@ -100,7 +101,7 @@ export class Game implements DebugApi {
     moveX: 0, moveY: 0, sprint: false, jump: false, interact: false,
     pauseToggle: false, handbrake: false, lookX: 0, lookY: 0,
   };
-  private frameEdges = { restart: false, mute: false, perf: false, graphics: false };
+  private frameEdges = { restart: false, mute: false, perf: false, graphics: false, weapon: false, swap: false, restartRun: false, pistol: false, smg: false };
   private pendingInput: InputFrame = { ...this.frameInput };
   /** True once until the next per-frame input pump (first sub-step of a frame). */
   private pendingFirst = false;
@@ -119,6 +120,7 @@ export class Game implements DebugApi {
     this.engine = new Engine(canvas);
     const scene = this.engine.scene;
 
+    this.weaponFx = new WeaponSystem(scene);
     this.sky = createSky(scene);
     scene.add(this.world.group);
 
@@ -175,6 +177,11 @@ export class Game implements DebugApi {
         mute: this.input.wasPressed('KeyM'),
         perf: this.input.wasPressed('F3'),
         graphics: this.input.wasPressed('KeyG'),
+        weapon: this.input.wasPressed('KeyQ'),
+        swap: this.input.wasPressed('Tab') || this.input.wasPressed('Digit2'),
+        pistol: this.input.wasPressed('Digit1'),
+        smg: this.input.wasPressed('Digit2'),
+        restartRun: this.input.wasPressed('Backspace'),
       };
       this.pendingInput = this.input.consume();
       this.pendingFirst = true;
@@ -209,6 +216,14 @@ export class Game implements DebugApi {
       PERF.addRender(st.render, st.submit, st.drawCalls, st.triangles);
       PERF.frame();
     };
+
+    // Shooting: hold the left mouse button (pointer lock) or click to fire.
+    canvas.addEventListener('mousedown', (e) => {
+      if (e.button === 0 && this.gameStatus === 'playing') this.firing = true;
+    });
+    window.addEventListener('mouseup', (e) => {
+      if (e.button === 0) this.firing = false;
+    });
 
     window.__MINI_GTA = this;
     // Read-only performance telemetry for automated tests (?perf=1).
@@ -283,6 +298,11 @@ export class Game implements DebugApi {
     if (this.gameStatus === 'playing') this.input.requestLock();
   }
 
+  /** Test/dev hook: select a weapon directly (same path as the number keys). */
+  selectWeapon(id: 'pistol' | 'smg'): void {
+    switchWeapon(this.weapon, id);
+  }
+
   setSimSpeed(multiplier: number): void {
     this.engine.simSpeed = Math.max(0.1, Math.min(8, multiplier));
   }
@@ -308,6 +328,9 @@ export class Game implements DebugApi {
       buildings: this.world.stats().buildings,
       drawCalls: this.engine.lastDrawCalls || this.engine.perfStats.drawCalls,
       fps: this.engine.fps,
+      weapon: { id: this.weapon.spec.id, mag: this.weapon.mag, reserve: this.weapon.reserve, armed: this.weapon.armed },
+      shotsFired: this.weapon.shots,
+      hits: this.weapon.hits,
     };
   }
 
@@ -463,7 +486,25 @@ export class Game implements DebugApi {
 
     // Hotkeys apply to the first simulation step of each frame.
     if (isFirstStep) {
-      if (inputEdges.restart && this.gameStatus !== 'menu') {
+      // R reloads while armed on foot; the run restart moves to Backspace.
+      if (inputEdges.restart && this.gameStatus === 'playing' && this.player.onFoot) {
+        const before = this.weapon.mag;
+        this.reload();
+        this.hud.toast(this.weapon.mag > before ? 'Reloaded' : 'Magazine full', 'info', 0.9);
+      }
+      if (inputEdges.weapon) {
+        this.weapon.armed = !this.weapon.armed;
+        this.hud.toast(this.weapon.armed ? `${this.weapon.spec.label} out` : 'Holstered', 'info', 1);
+      }
+      if (inputEdges.pistol) {
+        switchWeapon(this.weapon, 'pistol');
+        this.hud.toast('Pistol selected', 'info', 1);
+      }
+      if (inputEdges.smg) {
+        switchWeapon(this.weapon, 'smg');
+        this.hud.toast('SMG selected', 'info', 1);
+      }
+      if (inputEdges.restartRun && this.gameStatus !== 'menu') {
         this.restart();
         return;
       }
@@ -512,9 +553,13 @@ export class Game implements DebugApi {
       this.tickFootsteps(dt);
     }
 
+    // --- Shooting -------------------------------------------------------
+    this.updateShooting(dt, input, this.activeVehicle);
+
     // --- NPCs, mission, world -------------------------------------------
     // NPC AI runs at 30 Hz (every other fixed step): imperceptible, halves its cost.
     if (this.npcTick++ % 2 === 0) this.npcs.update(simDt * 2, this.player.position, this.activeVehicle);
+    this.processHits();
     this.mission.update(simDt, this.missionEnv());
     this.world.update(simDt, this.elapsed);
     this.sky.update(simDt);
@@ -556,6 +601,11 @@ export class Game implements DebugApi {
   private lastMoney = 0;
   private previousMoney = 0;
   private npcTick = 0;
+  private weapon = createWeaponState('pistol');
+  private weaponFx!: WeaponSystem;
+  private firing = false;
+  private npcHitPoints = new WeakMap<object, number>();
+  private recoil = 0;
   /** First-run coach: 'walk' → 'vehicle' → 'delivered' → 'done'. */
   private tutorialStep: 'walk' | 'vehicle' | 'delivered' | 'done' = 'walk';
   /**
@@ -640,10 +690,102 @@ export class Game implements DebugApi {
         waypoint: wp,
       },
       timeOfDayLabel: 'GOLDEN HOUR',
+      ammo: v ? null : { mag: this.weapon.mag, reserve: this.weapon.reserve, name: this.weapon.spec.label },
       prompt: this.promptFor(v, mission),
       hint: this.hintFor(mission, v),
     };
     this.hud.update(data);
+  }
+
+  /**
+   * Fire the current weapon toward the point under the crosshair. Pedestrians and
+   * traffic cars are the targets; every hit is queued and resolved after the NPC
+   * update so the AI state stays consistent.
+   */
+  private pendingHits: Array<{ id: number; damage: number }> = [];
+
+  private updateShooting(dt: number, input: InputFrame, driving: Vehicle | null): void {
+    this.weapon.cooldown = Math.max(0, this.weapon.cooldown - dt);
+    this.weaponFx.update(dt);
+    const armed = !driving && this.weapon.armed;
+    this.hud.setCrosshair(armed && this.gameStatus === 'playing', Math.min(1, this.recoil));
+    this.recoil = Math.max(0, this.recoil - dt * 7);
+    if (!armed || !this.firing || this.gameStatus !== 'playing') return;
+    if (!this.weapon.spec.auto) this.firing = false; // pistol: one click = one shot
+
+    const cam = this.engine.camera;
+    const origin = new THREE.Vector3();
+    cam.getWorldPosition(origin);
+    // Aim through the screen centre (where the crosshair is).
+    const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion).normalize();
+    // Muzzle starts slightly in front of the camera so tracers read well.
+    const muzzle = origin.clone().addScaledVector(dir, 0.9).add(new THREE.Vector3(0, -0.12, 0));
+
+    if (this.weapon.mag <= 0) {
+      if (this.weapon.reserve > 0) this.reload();
+      else {
+        this.audio.play('ui', 0.4);
+        this.hud.toast('Out of ammo — press R to reload', 'bad', 1.5);
+        this.firing = false;
+      }
+      return;
+    }
+
+    const targets: ShotTarget[] = [];
+    for (const ped of this.npcs.targetablePedestrians()) {
+      targets.push({ id: ped.id, position: ped.position.clone(), radius: 0.55 });
+    }
+    for (const car of this.npcs.trafficVehicles) {
+      if (car.role !== 'traffic' && car.role !== 'parked') continue;
+      targets.push({
+        id: 100000 + this.allVehicles().indexOf(car),
+        position: car.position.clone().setY(0.9),
+        radius: 1.3,
+      });
+    }
+    const res = this.weaponFx.tryShoot(this.weapon, muzzle, dir, { colliders: this.world.colliders, targets });
+    if (!res.fired) return;
+    this.recoil = Math.min(1, this.recoil + 0.6);
+    this.cameraRig.shake(this.weapon.spec.kick);
+    this.audio.play('step', 0.25); // short click-ish report
+    if (res.hitId >= 0) {
+      this.pendingHits.push({ id: res.hitId, damage: res.damage });
+      this.hud.pulseHitMarker();
+    }
+  }
+
+  private reload(): void {
+    const w = this.weapon;
+    if (w.mag >= w.spec.magSize || w.reserve <= 0) return;
+    const take = Math.min(w.spec.magSize - w.mag, w.reserve);
+    w.mag += take;
+    w.reserve -= take;
+    this.audio.play('ui', 0.5);
+    this.hud.toast('Reloaded', 'info', 0.8);
+  }
+
+  /** Apply queued bullet damage to pedestrians / traffic cars. */
+  private processHits(): void {
+    if (!this.pendingHits.length) return;
+    for (const hit of this.pendingHits) {
+      if (hit.id >= 100000) {
+        const car = this.allVehicles()[hit.id - 100000];
+        if (car && car.role !== 'player') {
+          const hpKey = car as unknown as object;
+          const hp = (this.npcHitPoints.get(hpKey) ?? 100) - hit.damage;
+          this.npcHitPoints.set(hpKey, hp);
+          if (hp <= 0) {
+            (this.npcs as unknown as { takeOver(v: Vehicle): boolean }).takeOver(car);
+            car.role = 'parked';
+            car.speed = 0;
+            this.hud.toast('Vehicle disabled', 'good', 1.2);
+          }
+        }
+      } else {
+        this.npcs.damagePedestrian(hit.id, hit.damage, this.player.position);
+      }
+    }
+    this.pendingHits.length = 0;
   }
 
   /** What pressing E does right now, or a touch hint when nothing is close. */
@@ -738,6 +880,56 @@ export class Game implements DebugApi {
     addHeadlightGlow(v);
   }
 
+  /**
+   * Put a freshly entered car onto the nearest asphalt point, rotated to face
+   * along the street, unless it is already on the road.
+   */
+  private snapToRoad(v: Vehicle): void {
+    const w = this.world;
+    if (w.isRoad(v.position.x, v.position.z)) return;
+    // At most 3.5 m: enough to reach the kerb, but never far enough to reach a
+    // mission marker (that would silently skip the "get a vehicle" objective).
+    const maxStep = 3.5;
+    if (!w.isRoad) return;
+    // Find the nearest road point by probing outward in 1 m steps.
+    let best: { x: number; z: number } | null = null;
+    let bestD = Infinity;
+    for (let r = 1; r <= maxStep; r += 1) {
+      for (let a = 0; a < 16; a++) {
+        const ang = (a / 16) * Math.PI * 2;
+        const x = v.position.x + Math.cos(ang) * r;
+        const z = v.position.z + Math.sin(ang) * r;
+        if (!w.isRoad(x, z)) continue;
+        if (w.overlapsCircle(x, z, 1.5)) continue;
+        const d = r;
+        if (d < bestD) {
+          bestD = d;
+          best = { x, z };
+        }
+      }
+      if (best) break;
+    }
+    if (!best) return;
+    v.position.x = best.x;
+    v.position.z = best.z;
+    v.mesh.position.copy(v.position);
+    // Face along the nearest street axis (roads are axis-aligned), extended past
+    // the car on BOTH sides; prefer the side with more road to drive into.
+    const onStreet = (alongX: boolean, sign: number): boolean => {
+      const px = alongX ? v.position.x + sign * 10 : v.position.x;
+      const pz = alongX ? v.position.z : v.position.z + sign * 10;
+      return w.isRoad(px, pz) && !w.overlapsCircle(px, pz, 1.5);
+    };
+    let yaw: number | null = null;
+    if (onStreet(true, 1) || onStreet(true, -1)) yaw = onStreet(true, 1) ? -Math.PI / 2 : Math.PI / 2;
+    else if (onStreet(false, 1) || onStreet(false, -1)) yaw = onStreet(false, 1) ? Math.PI : 0;
+    if (yaw !== null) {
+      v.yaw = yaw;
+      v.mesh.rotation.y = yaw;
+    }
+    v.mesh.rotation.y = v.yaw;
+  }
+
   /** The vehicle the player would enter if they pressed E right now (or null). */
   private nearbyVehicle(): Vehicle | null {
     const p = this.player.position;
@@ -802,6 +994,10 @@ export class Game implements DebugApi {
     }
     best.driven = true;
     this.activeVehicle = best;
+    // Entering from the pavement: point the car along the street and walk it just
+    // to the kerb (never far enough to scout a mission marker — that would skip
+    // the on-foot "meet the courier" step).
+    this.snapToRoad(best);
     if (this.tutorialStep === 'walk' || this.tutorialStep === 'vehicle') {
       this.tutorialStep = 'vehicle';
       this.hud.toast('In the car — hold W to drive. Follow the gold marker to the drop-off.', 'good', 4.5);

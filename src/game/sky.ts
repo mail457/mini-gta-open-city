@@ -36,13 +36,14 @@ export function createSky(scene: THREE.Scene): SkyRig {
   cam.bottom = -s;
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.02;
-  sun.shadow.radius = 2;
+  sun.shadow.radius = 3;
   sun.target.position.set(0, 0, 0);
   scene.add(sun.target);
   group.add(sun);
   group.add(sun.target);
 
-  const hemi = new THREE.HemisphereLight(0xcfe2ff, 0x4b4436, 1.15);
+  // Sky/ground bounce: warm sky fill keeps shadows from going black (GTA V look).
+  const hemi = new THREE.HemisphereLight(0xd6e6ff, 0x6b6048, 1.35);
   group.add(hemi);
 
   scene.add(group);

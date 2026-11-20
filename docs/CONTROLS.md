@@ -10,9 +10,13 @@
 | `Shift` (hold) | Sprint | — |
 | `Space` | Jump | Handbrake (slide / quick stop) |
 | `E` (or `F`) | Enter the nearest vehicle (within ~4 m) | Exit — you step out on the driver's side |
+| **Left mouse** | Fire the weapon (aim with the crosshair) | — (firearms are holstered while driving) |
+| `R` | Reload (restart the run = `Backspace`) | Restart the run |
+| `1` / `2` | Pistol / SMG | — |
+| `Q` | Holster / draw weapon | — |
 | `Mouse` | Orbit the camera around the player | Orbit the camera (it auto-trails the car when you stop moving the mouse) |
 | `Esc` / `P` | Pause | Pause |
-| `R` | Restart the delivery run | Restart the delivery run |
+| `Backspace` | Restart the delivery run | Restart the delivery run |
 | `M` | Mute / unmute | Mute / unmute |
 | `F3` | Toggle the performance overlay | Same |
 

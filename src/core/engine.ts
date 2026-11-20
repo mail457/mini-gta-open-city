@@ -68,7 +68,8 @@ export class Engine {
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     // ACES keeps the low-poly palette from clipping under bright sun.
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05;
+    // GTA V-style clean look: slightly hot exposure with ACES and a high-saturation grade.
+    renderer.toneMappingExposure = 1.18;
     renderer.shadowMap.enabled = true;
     // THREE r187 removed PCFSoftShadowMap; PCF is the soft-enough, fastest option.
     renderer.shadowMap.type = THREE.PCFShadowMap;
