@@ -4,9 +4,9 @@ A compact, third-person, open-city action game that runs in your browser. Walk t
 
 No account, no install, no plugins. Just open the page and press **PLAY**.
 
-| Start street | Driving |
+| Live site — in-game (new graphics pass) | Driving |
 |---|---|
-| ![Start street](docs/screenshots/start-street.png) | ![Driving](docs/screenshots/driving.png) |
+| ![Live site](docs/screenshots/gfx-playing.png) | ![Driving](docs/screenshots/driving.png) |
 
 | Mission complete | Pause (WebKit / Safari engine) |
 |---|---|
@@ -15,6 +15,10 @@ No account, no install, no plugins. Just open the page and press **PLAY**.
 ![status](https://img.shields.io/badge/build-static%20site-1f6feb) ![stack](https://img.shields.io/badge/TypeScript%20%C2%B7%20Three.js%20%C2%B7%20Vite-0b0f1a)
 
 ## Play it
+
+### ▶ Play online: **https://mini-gta-open-city.onrender.com**
+
+(Free hosting: the first visit after a quiet period may take up to a minute to wake.)
 
 - **Online:** open the URL in `PLAY.txt` / your deployment (see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
 - **Locally, without Node:** unzip `MINI-GTA-OPEN-CITY-v1.0.0.zip`, then
