@@ -116,7 +116,7 @@ export function createScreens(root: HTMLElement, cb: ScreenCallbacks): MenuScree
   const cTitle = document.createElement('h2');
   cTitle.className = 'mg-title';
   cTitle.textContent = 'How to play';
-  const backBtn = btn('BACK', 'back-button', { onClick: () => cb.onShowControls() });
+  const backBtn = btn('BACK', 'back-button', { onClick: () => cb.onBack() });
   const cActions = document.createElement('div');
   cActions.className = 'mg-actions';
   cActions.append(backBtn);

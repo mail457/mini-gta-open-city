@@ -53,6 +53,8 @@ export interface ScreenCallbacks {
   onQuitToMenu(): void;
   onToggleMute(): void;
   onShowControls(): void;
+  /** Back from the controls screen to wherever it was opened from. */
+  onBack(): void;
 }
 
 export interface ScreensApi {
@@ -139,7 +141,11 @@ export class Game implements DebugApi {
       onRestart: () => this.restart(),
       onQuitToMenu: () => this.quitToMenu(),
       onToggleMute: () => this.toggleMute(),
-      onShowControls: () => this.setStatus('controls'),
+      onShowControls: () => {
+        this.controlsReturnTo = this.gameStatus;
+        this.setStatus('controls');
+      },
+      onBack: () => this.setStatus(this.controlsReturnTo),
     });
 
     // Place player at the spawn POI facing north up the street.
@@ -155,6 +161,9 @@ export class Game implements DebugApi {
     this.setStatus('menu');
     this.hud.setVisible(false);
     this.ready = true;
+    // The WebGL layer sits *under* the menu overlay, so one forced frame here is
+    // wasteful — the first menu frame is rendered by the loop when it starts.
+    (this as unknown as { engineStartedAt: number }).engineStartedAt = performance.now();
 
     // Input is sampled once per rendered frame — NOT per fixed simulation
     // sub-step — because keyboard edges (E, Esc, R) only exist for one frame.
@@ -219,6 +228,11 @@ export class Game implements DebugApi {
   }
 
   teleport(x: number, z: number): void {
+    // A teleport is a scripted jump: never let a tap from just before it fire here.
+    this.interactLatchedUntil = 0;
+    this.pauseLatchedUntil = 0;
+    this.pendingInput.interact = false;
+    this.pendingInput.pauseToggle = false;
     // Test convenience: teleporting while driving moves the CAR (so a test can
     // drive straight to a drop-off instead of simulating a whole route).
     if (this.activeVehicle) {
@@ -288,8 +302,8 @@ export class Game implements DebugApi {
     this.screens.show(next);
     const showHud = next === 'playing' || next === 'missionResult';
     this.hud.setVisible(showHud);
-    // Pause the simulation only for non-playing statuses; the menu still renders
-    // (camera + world update) so the start screen has a living city behind it.
+    // The simulation only runs while playing. (The renderer needs frames too:
+    // Safari does not service requestAnimationFrame for an occluded WebGL canvas.)
     this.engine.paused = next !== 'playing';
     this.input.active = next === 'playing';
     if (next !== 'playing') {
@@ -408,6 +422,17 @@ export class Game implements DebugApi {
     this.pendingFirst = false;
     this.input.age(dt);
     if (this.gameStatus === 'playing') this.elapsed += dt;
+    // Frames that arrive in bursts after the engine throttled rendering (software
+    // rendering, first seconds after start) must not make the player teleport.
+    const simDt = Math.min(dt, 1 / 25);
+    // Sim clock: ignore the catch-up frames right after PLAY / RESUME.
+    if (this.gameStatus === 'playing') {
+      if (!this.simClockStarted) this.simClockSettle--;
+      if (this.simClockSettle <= 0) this.simClockStarted = true;
+    } else {
+      this.simClockStarted = false;
+      this.simClockSettle = 45;
+    }
     this.interactCooldown = Math.max(0, this.interactCooldown - dt);
 
     // Hotkeys apply to the first simulation step of each frame.
@@ -440,9 +465,9 @@ export class Game implements DebugApi {
     let speedRatio = 0;
     if (this.activeVehicle) {
       const v = this.activeVehicle;
-      const impact = this.vehicles.stepDriven(v, input, this.world, dt);
+      const impact = this.vehicles.stepDriven(v, input, this.world, simDt);
       const vImpact = this.vehicles.resolveVehicleCollisions(v, this.allVehicles());
-      this.vehicles.updateVisuals(v, dt, input);
+      this.vehicles.updateVisuals(v, simDt, input);
       const hit = Math.max(impact, vImpact);
       if (hit > 4) {
         this.cameraRig.shake(Math.min(0.3, hit * 0.012));
@@ -454,17 +479,18 @@ export class Game implements DebugApi {
       speedRatio = Math.min(1, Math.abs(v.speed) / v.spec.maxSpeed);
       this.aoPoi = null;
     } else {
-      this.player.update(dt, input, this.cameraRig.yaw);
+      this.player.update(simDt, input, this.cameraRig.yaw);
       if (this.player.didJump) this.audio.play('jump', 0.6);
       speedRatio = Math.min(1, this.player.speed / 8);
       this.tickFootsteps(dt);
     }
 
     // --- NPCs, mission, world -------------------------------------------
-    this.npcs.update(dt, this.player.position, this.activeVehicle);
-    this.mission.update(dt, this.missionEnv());
-    this.world.update(dt, this.elapsed);
-    this.sky.update(dt);
+    // NPC AI runs at 30 Hz (every other fixed step): imperceptible, halves its cost.
+    if (this.npcTick++ % 2 === 0) this.npcs.update(simDt * 2, this.player.position, this.activeVehicle);
+    this.mission.update(simDt, this.missionEnv());
+    this.world.update(simDt, this.elapsed);
+    this.sky.update(simDt);
 
     // Mission events.
     const ev = this.mission.state.event;
@@ -502,6 +528,11 @@ export class Game implements DebugApi {
 
   private lastMoney = 0;
   private previousMoney = 0;
+  private npcTick = 0;
+  private controlsReturnTo: GameStatus = 'menu';
+  /** Frames to skip on the mission clock while the renderer catches up after start. */
+  private simClockSettle = 0;
+  private simClockStarted = false;
   // Taps are latched briefly: an edge that was queued during any stalled or
   // resumed-indicator frame is still honoured on the next live simulation step.
   private interactLatchedUntil = 0;

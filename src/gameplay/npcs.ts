@@ -205,10 +205,12 @@ export class NpcSystem implements NPCSystemApi {
     this.spawnTraffic(NPC_CONFIG.trafficCars);
     this.pedCount = this.peds.length;
 
+    // Shadows: only the car bodies cast (cheap silhouette); pedestrians don't —
+    // 14 skinned-looking figures × 3 parts would double the draw calls.
     this.group.traverse((o) => {
       const mesh = o as THREE.Mesh;
       if (mesh.isMesh) {
-        mesh.castShadow = true;
+        mesh.castShadow = !!(o.parent?.name?.startsWith('traffic'));
         mesh.receiveShadow = false;
       }
     });
