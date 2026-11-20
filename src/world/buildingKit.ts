@@ -139,8 +139,10 @@ const SILL_DEPTH = 0.22;
 export function buildBuildingGeometry(spec: BuildingGeoSpec): { wall: THREE.BufferGeometry; glass: THREE.BufferGeometry; trim: THREE.BufferGeometry } {
   const st = BUILDING_STYLES[spec.style % BUILDING_STYLES.length];
   // The stone body: a chamfered slab plus a proud parapet lip (same family, so
-  // the tower reads as one solid mass from the street).
+  // the tower reads as one solid mass from the street). QA marker on every part
+  // so a merged bucket can be recognised by geometry alone (see world.ts).
   const walls: THREE.BufferGeometry[] = bodySlabs(spec, st);
+  for (const g of walls) g.userData.kind = 'facade';
   const glass: THREE.BufferGeometry[] = [];
   const trims: THREE.BufferGeometry[] = [];
 

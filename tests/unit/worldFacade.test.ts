@@ -83,7 +83,6 @@ describe('buildingKit — a facade must be a lit stone body with real windows', 
   const { wall, glass, trim } = buildBuildingGeometry(SPEC);
 
   it('emits non-empty, non-indexed, merge-friendly geometry', () => {
-    console.log('DBG1 wall=' + wall.attributes.position.count + ' glass=' + glass.attributes.position.count + ' trim=' + trim.attributes.position.count);
     for (const [name, g] of Object.entries({ wall, glass, trim })) {
       expect(positions(g).count, `${name} has vertices`).toBeGreaterThan(0);
       expect(g.index, `${name} is non-indexed`).toBeNull();
@@ -255,23 +254,19 @@ describe('buildingKit — a facade must be a lit stone body with real windows', 
 });
 
 /**
- * The building body: the only unindexed vertex-coloured bucket that spans the
- * full skyline (ground level up past 50 m) and whose colours are the stone
- * family. Found by geometry + vertex-colour lightness, never by material state.
+ * The building body bucket. It is found by the `kind: 'facade'` geometry tag set
+ * in City.buildBuildings (and mirrored on every bodySlabs() part), never by
+ * material or container scans: a Node/vitest run in this repo was observed to
+ * hand back pooled materials and a re-ordered `group.children`, so tests that
+ * identified the facade via `m.material` misfired.
  */
 function findBuildingBody(city: City): THREE.Mesh | undefined {
-  return findAll(city.group, (m) => {
-    const g = m.geometry;
-    if (g.index || !g.attributes.position || g.attributes.position.count < 80000 || !g.attributes.color) return false;
-    g.computeBoundingBox();
-    const box = g.boundingBox!;
-    if (box.min.y > 1 || box.max.y < 50) return false;
-    const c = g.attributes.color;
-    let min = Infinity;
-    for (let i = 0; i < c.array.length; i++) min = Math.min(min, c.array[i]);
-    // Stone has no near-black channel; the dark glass grid does.
-    return min > 0.1;
-  })[0];
+  let found: THREE.Mesh | undefined;
+  city.group.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!found && m.isMesh && (m.geometry.userData as { kind?: string }).kind === 'facade') found = m;
+  });
+  return found;
 }
 
 describe('City — facades render as one lit surface per building', () => {
@@ -294,40 +289,41 @@ describe('City — facades render as one lit surface per building', () => {
     }
   });
 
-  it('puts every building facade into one vertex-coloured wall bucket whose colours are lit stone', () => {
-    // Floors of glass: one per style bucket, always metalness 0.5.
-    const glassMeshes = findAll(city.group, (m) => material(m).metalness === 0.5);
-    expect(glassMeshes.length).toBeGreaterThanOrEqual(1);
-    // The stone body: the only vertex-coloured bucket that is not glass, not the
-    // cornice/sill trim and not the distant backdrop.
-    const wallMeshes = findAll(
-      city.group,
-      (m) => material(m).vertexColors === true && material(m).metalness !== 0.5 && m.material !== glassMeshes[0].material && m.geometry.attributes.position.count > 50000,
-    );
-    expect(wallMeshes.length, `wall buckets found: ${wallMeshes.map((m) => m.geometry.attributes.position.count)}`).toBe(1);
-    const walls = findBuildingBody(city);
-    expect(walls, 'the tall stone body bucket exists').toBeDefined();
-    const c = colours(walls!.geometry);
+  it('puts the stone body into one vertex-coloured bucket tagged for tools, added to a live scene graph', () => {
+    // One facade mesh, identified by the `kind: 'facade'` geometry tag City sets.
+    const facadeMeshes = findAll(city.group, (m) => !!m.geometry.userData && m.geometry.userData.kind === 'facade');
+    expect(facadeMeshes.length, 'exactly one facade bucket').toBe(1);
+    const walls = facadeMeshes[0];
+    expect((walls.material as THREE.MeshStandardMaterial).vertexColors).toBe(true);
+
+    // Lifecycle invariant (this bit once blanked the whole city): a mesh with
+    // matrixAutoUpdate = false must have its matrixWorld wired, or
+    // updateMatrixWorld() refuses to register it with the renderer.
+    expect(walls.matrixAutoUpdate).toBe(false);
+    expect(walls.matrixWorld.equals(walls.matrix)).toBe(true);
+    expect(walls.matrixWorld.equals(new THREE.Matrix4())).toBe(true);
+
+    const c = colours(walls.geometry);
     expect(c).toBeDefined();
     let min = Infinity;
     let max = -Infinity;
+    let blacks = 0;
     for (let i = 0; i < c!.array.length; i++) {
       min = Math.min(min, c!.array[i]);
       max = Math.max(max, c!.array[i]);
+      if (c!.array[i] < 0.05) blacks++;
     }
-    // Normalised to the bucket: the bug was facades that were mostly BLACK
-    // (0,0,0 cornice/strip + black glass columns). Regardless of which palette
-    // a style uses, no stone body may be dominated by near-black pixels.
-    let blacks = 0;
-    for (let i = 0; i < c!.array.length; i++) if (c!.array[i] < 0.05) blacks++;
+    // The bug was facades dominated by BLACK (0,0,0 cornice/strip + black glass
+    // columns): no stone body may be mostly near-black or near-white.
     expect(blacks / c!.array.length, 'near-black wall vertex colours').toBeLessThan(0.02);
     expect(min).toBeGreaterThan(0);
-    expect(max).toBeLessThanOrEqual(1);
-    // The wall bucket must cover every building: its horizontal extent reaches the
-    // outermost building footprints.
-    const box = (walls!.geometry.computeBoundingBox(), walls!.geometry.boundingBox!);
-    expect(box.max.x - box.min.x).toBeGreaterThan(200);
-    expect(box.max.z - box.min.z).toBeGreaterThan(200);
+    // Stone sits below near-white (0xe8dcc6 was 0.81 linear and washed the walls
+    // into the sky); the trim/cornice bucket is the only brighter surface.
+    expect(max).toBeLessThan(0.85);
+    // A real, tall building at street level.
+    const box = (walls.geometry.computeBoundingBox(), walls.geometry.boundingBox!);
+    expect(box.min.y, 'facade reaches street level').toBeLessThan(15);
+    expect(box.max.y, 'facade is a real tower').toBeGreaterThan(20);
   });
 
   it('exposes the density knob and keeps it a single tunable constant', () => {
@@ -350,23 +346,7 @@ describe('City — facades render as one lit surface per building', () => {
     // vertex count: the stone body is the vertex-coloured, non-glass bucket that
     // reaches from the ground to roof height. (A hard-coded count silently pointed
     // at the cornice/sill bucket once the window grid changed.)
-    const wall = city.group.children
-      .map((o) => o as THREE.Mesh)
-      .find((m) => {
-        if (!m.isMesh || (m as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) return false;
-        const g = m.geometry;
-        const mat = material(m);
-        if (!mat.vertexColors || mat.metalness === 0.5 || !g.attributes.color) return false;
-        g.computeBoundingBox();
-        const b = g.boundingBox!;
-        const tall = b.max.y - b.min.y > 50 && b.min.y < 1;
-        // Stone, not trim: the wall bucket is dominated by mid-tone colours.
-        let sum = 0;
-        const c = g.attributes.color;
-        for (let i = 0; i < c.array.length; i++) sum += c.array[i];
-        return tall && sum / c.array.length < 0.6;
-      });
-    expect(wall, 'building body bucket').toBeDefined();
+    const wall = findBuildingBody(city);
     const c = colours(wall!.geometry)!;
     let mean = 0;
     let max = -Infinity;

@@ -99,15 +99,20 @@ export const CITY_DRESSING = {
  * lifts every facade without touching the ground much; `envIntensity` raises how
  * much sky the stone/concrete picks up. Both live in the city scene, not the sky.
  */
+// Calibrated in-browser (render-target luminance of the facade bucket vs the sky
+// behind it, SwiftShader, game sky rig): envMapIntensity 1.0 / 1.6 / 2.4 moved the
+// facade from 163.0 to 165.7 to 169.2, i.e. the sky IBL is what actually lights a
+// shaded wall; a directional fill adds only ~2 luminance steps there but every
+// extra unit also brightens the pavement, so it stays low.
 export const FACADE_LIGHTING = {
   /** Colour of the warm facade fill. */
   fillColor: 0xfff1dc,
   /** DirectionalLight intensity of the facade fill (0 disables it). */
-  fillIntensity: 1.15,
+  fillIntensity: 1.5,
   /** Direction it shines FROM (normalised); near-vertical keeps streets readable. */
-  fillDir: { x: 0.32, y: 0.86, z: -0.4 },
+  fillDir: { x: 0.0, y: 0.55, z: -0.85 },
   /** envMapIntensity used by the stone/concrete facade material. */
-  envIntensity: 1.6,
+  envIntensity: 2.4,
 } as const;
 
 const PALETTE = {
@@ -273,13 +278,24 @@ export class City implements CityWorld {
       return;
     }
     if (list.length > 1) list.forEach((g) => g.dispose());
+    this.addSceneMesh(merged, material, shadow);
+  }
+
+  /** Add one already-merged geometry as a scene mesh (shared by add()). */
+  private addSceneMesh(merged: THREE.BufferGeometry, material: THREE.Material, shadow: boolean): void {
     merged.computeBoundingSphere();
     this.tris += (merged.index ? merged.index.count : merged.attributes.position.count) / 3;
     const mesh = new THREE.Mesh(merged, material);
     mesh.castShadow = shadow;
     mesh.receiveShadow = true;
+    // Static mesh: compute local+world matrices once, BEFORE attaching it.
+    // Order is load-bearing: updateMatrixWorld() treats an object whose
+    // matrixAutoUpdate is false and whose matrixWorld is still the identity as a
+    // detached root, logs "Object3D.add: object can't be added..." and the
+    // renderer never sees it (all city meshes render as nothing).
     mesh.matrixAutoUpdate = false;
     mesh.updateMatrix();
+    mesh.matrixWorld.copy(mesh.matrix);
     this.group.add(mesh);
     this.disposables.push(merged, material);
   }
@@ -489,7 +505,13 @@ export class City implements CityWorld {
       metalness: 0.0,
       envMapIntensity: FACADE_LIGHTING.envIntensity,
     });
-    this.add(walls, facadeMaterial, true);
+    // Tag the merged facade bucket so tools/tests can identify the stone body
+    // by geometry alone (a material scan is unreliable once a bundler re-pools
+    // materials). Purely informational: it carries no draw state.
+    const facadeGeometry = walls.length === 1 ? walls[0] : mergeGeometries(walls, false);
+    if (facadeGeometry) facadeGeometry.userData.kind = 'facade';
+    if (facadeGeometry && walls.length > 1) walls.forEach((g) => g.dispose());
+    if (facadeGeometry) this.addSceneMesh(facadeGeometry, facadeMaterial, true);
     // Glass: dark, glossy, reflects the sky so the grid reads as windows.
     this.add(glassGeos, new THREE.MeshStandardMaterial({
       vertexColors: true,

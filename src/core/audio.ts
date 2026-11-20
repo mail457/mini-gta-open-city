@@ -1,6 +1,15 @@
 import type { AudioBus, SoundName } from '../contracts';
 
 /**
+ * True once the player has produced a gesture the autoplay policy accepts.
+ * The AudioContext is only created after that, which keeps the console clean.
+ */
+function userHasInteracted(): boolean {
+  const ua = navigator as Navigator & { userActivation?: { hasBeenActive: boolean } };
+  return ua.userActivation ? ua.userActivation.hasBeenActive : true;
+}
+
+/**
  * Tiny WebAudio synthesiser — no audio assets, every sound is generated.
  * Owned by: Lead. Safe to construct before any user gesture (context starts suspended).
  */
@@ -31,6 +40,9 @@ export class Audio implements AudioBus {
       }
       return this.ctx;
     }
+    // Browsers refuse to start audio before a user gesture; creating the context
+    // early only produces console warnings, so wait for the first interaction.
+    if (!userHasInteracted()) return null;
     const Ctor =
       window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!Ctor) return null;
